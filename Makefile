@@ -8,7 +8,7 @@ CCFLAGS ?= -Wall -g3 -fsanitize=address
 SHLIBS ?= -lreadline
 
 # Target program
-all: fsh
+all: fsh pwd
 
 # Rule to build the executable
 fsh: fsh.o
@@ -16,6 +16,12 @@ fsh: fsh.o
 
 # Rule to compile the source file into an object file
 fsh.o: fsh.c
+	$(CC) $(CCFLAGS) -c $< -o $@
+
+pwd: pwd.o
+	$(CC) $(CCFLAGS) -o $@ $^
+
+pwd.o: pwd.c
 	$(CC) $(CCFLAGS) -c $< -o $@
 
 # Clean target
