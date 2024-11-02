@@ -26,4 +26,4 @@ pwd.o: pwd.c
 
 # Clean target
 clean:
-	rm -f fsh *.o
+	rm -f fsh *.o pwd
