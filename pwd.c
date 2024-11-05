@@ -28,7 +28,7 @@ int ouvrir_repertoire_parent() {
     return parent_fd;
 }
 
-// Trouve le nom du répertoire actuel dans le répertoire parent
+// Trouve le nom du répertoire à partir de son inode et de son périphérique
 char *trouver_nom_repertoire(DIR *dir, struct stat *current_stat, int parent_fd) {
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -67,8 +67,10 @@ int mettre_a_jour_chemin(char **res, char *name, size_t *res_len) {
 }
 
 // Fonction principale pour obtenir le chemin absolu
-char *nom_du_repertoire() {
+char *chemin_du_repertoire() {
     char *res = initialiser_buffer();
+    // On mémorise le descripteur de fichier courant pour pouvoir revenir en arrière à la fin et éviter un effet de bord
+    int current_fd = open(".", O_RDONLY);
     if (res == NULL) return NULL;
 
     size_t res_len = 0;
@@ -138,16 +140,45 @@ char *nom_du_repertoire() {
         strcpy(res, "/");
     }
 
+    // Revenir au répertoire courant
+    if (fchdir(current_fd) == -1) {
+        perror("fchdir current");
+        free(res);
+        return NULL;
+    }
+    close(current_fd);
+
     return res;
 }
 
-int main() {
-    char *rep = nom_du_repertoire();
-    if (rep == NULL) {
-        return 1;
+// Pour ce faire rien de plus simple, il suffit de trouver le dernier '/' dans le chemin absolu
+char* nom_repertoire_courant() {
+    char *chemin = chemin_du_repertoire();
+    if (chemin == NULL) {
+        return NULL;
     }
 
-    printf("Le répertoire courant est : %s\n", rep);
-    free(rep);
+    // Utiliser strtok pour trouver le dernier segment du chemin
+    char *nom = NULL;
+    char *token = strtok(chemin, "/");
+    while (token != NULL) {
+        nom = token;
+        token = strtok(NULL, "/");
+    }
+
+    char *resultat = strdup(nom ? nom : "/");
+    free(chemin);
+    return resultat;
+}
+
+// Petit test pour vérifier que tout fonctionne
+int main() {
+    char *chemin = chemin_du_repertoire();
+    printf("Chemin absolu: %s\n", chemin);
+    free(chemin);
+    char *name = nom_repertoire_courant();
+    if (name == NULL) return 1;
+    printf("Nom du répertoire courant: %s\n", name);
+    free(name);
     return 0;
 }
