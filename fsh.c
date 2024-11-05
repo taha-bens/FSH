@@ -6,6 +6,8 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
+#include "pwd.h"
+
 #define RESET_COLOR "\033[00m"
 #define RED_COLOR "\033[91m"
 #define MAX_LENGTH_PROMT 30 + sizeof(RED_COLOR) + sizeof(RESET_COLOR)
@@ -84,6 +86,11 @@ int main() {
             snprintf(formated_promt,MAX_LENGTH_PROMT, "[%s%d%s]LeDirEstIci$ ",RED_COLOR,last_return_value,RESET_COLOR);
         }
         char *ligne = readline(formated_promt);
+        // ligne vide
+        if (!ligne) {
+            free(ligne);
+            continue;
+        }
         if (ligne[0] == 0) {
             last_return_value = 0;
             free(ligne);
@@ -100,10 +107,17 @@ int main() {
 
         //cases pour le lancement des commandes
         if (strcmp(splited[0], "exit") == 0) {
+            // si on a un argument alors c'est la valeur de retour
+            if (splited[1]) {
+                last_return_value = atoi(splited[1]); 
+            }
             free(ligne);
-            exit(0);
+            goto fin;
         }
 
+        else if (strcmp(splited[0], "pwd") == 0) {
+            pwd();
+        }
 
 
         for (int i=0; splited[i]; i++) {
@@ -120,7 +134,17 @@ int main() {
             printf("%c",ligne[i]);
             last_return_value++;
         }
+
+        
+
         free(ligne);
     }
+    fin:
+
+    for (int i = 0; *(splited + i); i++){
+        free(splited[i]);
+    }
+    free(splited);
+    exit(last_return_value);
 
 }

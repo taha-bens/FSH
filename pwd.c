@@ -172,7 +172,7 @@ char* nom_repertoire_courant() {
 }
 
 // Petit test pour vérifier que tout fonctionne
-int main() {
+int pwd() {
     char *chemin = chemin_du_repertoire();
     printf("Chemin absolu: %s\n", chemin);
     free(chemin);
@@ -182,3 +182,7 @@ int main() {
     free(name);
     return 0;
 }
+
+//int main(){
+//    pwd();
+//}
