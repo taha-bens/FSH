@@ -72,6 +72,12 @@ char** str_split(char* a_str, const char a_delim)
 
     return result;
 }
+void free_split(char **splited){
+    for (int i = 0; *(splited + i); i++){
+        free(splited[i]);
+    }
+    free(splited);
+}
 
 int main() {
     int last_return_value = 0;
@@ -104,6 +110,10 @@ int main() {
         //     printf("%s\n",args);
         // }
 
+        for (int i=0; splited[i]; i++) {
+            printf("%s\n",splited[i]);
+        }
+
         //cases pour le lancement des commandes
         if (strcmp(splited[0], "exit") == 0) {
             // si on a un argument alors c'est la valeur de retour
@@ -113,37 +123,16 @@ int main() {
             free(ligne);
             goto fin;
         }
-
         else if (strcmp(splited[0], "pwd") == 0) {
-            pwd();
+            last_return_value = pwd();
         }
-
-
-        for (int i=0; splited[i]; i++) {
-            printf("%s\n",splited[i]);
-        }
-        puts("\n");
-
-        last_return_value = 0;
-        for (int i =0; i<1024;i++) {
-            if (ligne[i] == 0) {
-                printf("\n");
-                break;
-            }
-            printf("%c",ligne[i]);
-            last_return_value++;
-        }
-
         
 
         free(ligne);
+        free_split(splited);
     }
     fin:
-
-    for (int i = 0; *(splited + i); i++){
-        free(splited[i]);
-    }
-    free(splited);
+    free_split(splited);
     exit(last_return_value);
 
 }
