@@ -133,15 +133,22 @@ int main() {
     int last_return_value = 0;
     char formated_promt[MAX_LENGTH_PROMT];
     char **splited;
+    // Rediriger stdout vers stderr pour les tests
+    dup2(STDERR_FILENO, STDOUT_FILENO);
     while (1) {
+        char *current_dir = nom_repertoire_courant();
+        if (current_dir == NULL) {
+            perror("get_current_dir_name");
+            return 1;
+        }
         if (last_return_value == 0) {
-            snprintf(formated_promt,MAX_LENGTH_PROMT, "[%d]LeDirEstIci$ ",last_return_value);
+            snprintf(formated_promt,MAX_LENGTH_PROMT, "[%d]%s$ ",last_return_value, current_dir);
         }
         else {
-            snprintf(formated_promt,MAX_LENGTH_PROMT, "[%s%d%s]LeDirEstIci$ ",RED_COLOR,last_return_value,RESET_COLOR);
+            snprintf(formated_promt,MAX_LENGTH_PROMT, "[%s%d%s]%s$ ", RED_COLOR, last_return_value, RESET_COLOR, current_dir);
         }
-        fprintf(stderr, "%s", formated_promt); // Afficher le prompt sur stderr pour les tests
-        char *ligne = readline(""); // Lire une ligne
+        free(current_dir);
+        char *ligne = readline(formated_promt);
         // Ligne vide
         if (!ligne) {
             free(ligne);
