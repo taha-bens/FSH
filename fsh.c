@@ -22,7 +22,7 @@ char **split(char *src, char delimiter){
         }
     }
     printf("allocation %d\n",compteur);
-    
+    return NULL;
 }
 
 char** str_split(char* a_str, const char a_delim)
@@ -76,7 +76,6 @@ char** str_split(char* a_str, const char a_delim)
 int main() {
     int last_return_value = 0;
     char formated_promt[MAX_LENGTH_PROMT];
-    char *args;
     char **splited;
     while (1) {
         if (last_return_value == 0) {
