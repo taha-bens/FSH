@@ -278,25 +278,6 @@ char *trim_and_reduce_spaces(const char *str)
   return new_str;
 }
 
-char *custom_readline(const char *prompt) {
-    // Afficher le prompt
-    write(STDERR_FILENO, prompt, strlen(prompt));
-    // Sauvegarder la position du curseur
-    write(STDERR_FILENO, "\033[s", 3);
-
-    // Lire l'entrée de l'utilisateur
-    char *line = NULL;
-    size_t len = 0;
-    ssize_t nread = getline(&line, &len, stdin);
-
-    // Mettre le caractère de fin de chaîne
-    if (nread > 0) {
-        line[nread - 1] = '\0';
-    }
-
-    return line;
-}
-
 int main()
 {
   int last_return_value = 0;
@@ -336,19 +317,24 @@ int main()
     free(current_dir);
     free(prompt_dir);
     // Afficher le prompt
-    char *line = custom_readline(formated_promt);
-    // Ligne vide ou contenant uniquement des espaces
-    while (!line || strlen(line) == 0 || strspn(line, " \t\r\n") == strlen(line))
+    char *line = readline(formated_promt);
+    // Ligne qui contient uniquement le caractère de fin de ligne 
+    if (line == NULL || line[0] == '\0')
     {
       free(line);
-      line = NULL;
-      // Remonter la position du curseur
-      write(STDERR_FILENO, "\033[u", 3);
-      // Effacer la ligne
-      write(STDERR_FILENO, "\033[K", 3);
-      // Lire une nouvelle ligne
-      line = custom_readline("");
-
+      // Arrêter la boucle et quitter
+      exit(last_return_value);
+    }
+    // Si la ligne a que des espaces alors on la libère et on recommence
+    while(strlen(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '\n') {
+      free(line);
+      line = readline(formated_promt);
+      if (line[0] == '\0')
+      {
+        free(line);
+        // Arrêter la boucle et quitter
+        exit(last_return_value);
+      }
     }
     // Supprimer les espaces en trop
     char *cleaned_line = trim_and_reduce_spaces(line);
