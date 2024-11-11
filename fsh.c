@@ -4,6 +4,9 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -231,6 +234,51 @@ clean:
   return return_value;
 }
 
+// Fonction pour afficher le type d'un fichier
+int ftype(char *file_name)
+{
+  struct stat file_stat;
+  char abs_path[PATH_MAX];
+
+  // Obtenir le chemin absolu du fichier
+  if (realpath(file_name, abs_path) == NULL)
+  {
+    fprintf(stderr, "ftype: No such file or directory\n");
+    return 1;
+  }
+
+  // Obtenir les informations sur le fichier
+  if (lstat(abs_path, &file_stat) == -1)
+  {
+    fprintf(stderr, "ftype: No such file or directory\n");
+    return 1;
+  }
+
+  // Afficher le type de fichier
+  if (S_ISREG(file_stat.st_mode))
+  {
+    printf("regular file\n");
+  }
+  else if (S_ISLNK(file_stat.st_mode))
+  {
+    printf("symbolic link\n");
+  }
+  else if (S_ISDIR(file_stat.st_mode))
+  {
+    printf("directory\n");
+  }
+  else if (S_ISFIFO(file_stat.st_mode))
+  {
+    printf("named pipe\n");
+  }
+  else
+  {
+    printf("other\n");
+  }
+
+  return 0;
+}
+
 char *trim_and_reduce_spaces(const char *str)
 {
   if (str == NULL)
@@ -380,6 +428,10 @@ int main()
     else if (strcmp(splited[0], "cd") == 0)
     {
       last_return_value = execute_cd(splited[1]);
+    }
+    else if (strcmp(splited[0], "ftype") == 0)
+    {
+      last_return_value = ftype(splited[1]);
     }
 
     free(line);
