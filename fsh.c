@@ -159,7 +159,6 @@ int execute_pwd()
 // absolu du répertoire demandé On met ensuite à jour les variables
 // d'environnement PWD et OLDPWD pour refléter le changement de répertoire sur
 // le shell
-
 int execute_cd(char *path)
 {
   int return_value = 0;
@@ -223,10 +222,84 @@ clean:
   return return_value;
 }
 
+char *trim_and_reduce_spaces(const char *str)
+{
+  if (str == NULL)
+    return NULL;
+
+  // Supprimer les espaces en début
+  const char *start = str;
+  while (*start == ' ' || *start == '\t' || *start == '\n')
+  {
+    start++;
+  }
+
+  // Supprimer les espaces en fin
+  const char *end = start + strlen(start) - 1;
+  while (end > start && (*end == ' ' || *end == '\t' || *end == '\n'))
+  {
+    end--;
+  }
+
+  // Calculer la longueur de la nouvelle chaîne
+  size_t new_len = end - start + 1;
+
+  // Allouer de la mémoire pour la nouvelle chaîne
+  char *new_str = malloc(new_len + 1);
+  if (new_str == NULL)
+  {
+    return NULL; // Allocation échouée
+  }
+
+  // Réduire les espaces multiples entre les mots à un seul espace
+  char *dest = new_str;
+  const char *src = start;
+  int in_space = 0;
+
+  while (src <= end)
+  {
+    if (*src == ' ' || *src == '\t' || *src == '\n')
+    {
+      if (!in_space)
+      {
+        *dest++ = ' ';
+        in_space = 1;
+      }
+    }
+    else
+    {
+      *dest++ = *src;
+      in_space = 0;
+    }
+    src++;
+  }
+  *dest = '\0';
+
+  return new_str;
+}
+
+char *custom_readline(const char *prompt) {
+    // Afficher le prompt
+    write(STDERR_FILENO, prompt, strlen(prompt));
+    // Sauvegarder la position du curseur
+    write(STDERR_FILENO, "\033[s", 3);
+
+    // Lire l'entrée de l'utilisateur
+    char *line = NULL;
+    size_t len = 0;
+    ssize_t nread = getline(&line, &len, stdin);
+
+    // Mettre le caractère de fin de chaîne
+    if (nread > 0) {
+        line[nread - 1] = '\0';
+    }
+
+    return line;
+}
+
 int main()
 {
   int last_return_value = 0;
-  int empty_command = 0;
   char formated_promt[MAX_LENGTH_PROMT];
   char **splited;
   // Rediriger stdout vers stderr pour les tests
@@ -250,66 +323,74 @@ int main()
       perror("chemin_du_repertoire");
       return 1;
     }
-    if (last_return_value == 0 && empty_command == 0)
+    if (last_return_value == 0)
     {
       snprintf(formated_promt, MAX_LENGTH_PROMT, "[%d]%s$ ", last_return_value,
                prompt_dir);
     }
-    else if (last_return_value != 0 && empty_command == 0)
+    else if (last_return_value != 0)
     {
       snprintf(formated_promt, MAX_LENGTH_PROMT, "[%s%d%s]%s$ ", RED_COLOR,
                last_return_value, RESET_COLOR, prompt_dir);
     }
     free(current_dir);
     free(prompt_dir);
-    char *ligne = readline(formated_promt);
+    // Afficher le prompt
+    char *line = custom_readline(formated_promt);
     // Ligne vide ou contenant uniquement des espaces
-    if (!ligne || strlen(ligne) == 0 || strspn(ligne, " \t\r\n") == strlen(ligne))
+    while (!line || strlen(line) == 0 || strspn(line, " \t\r\n") == strlen(line))
     {
-      free(ligne);
-      empty_command = 1;
+      free(line);
+      line = NULL;
+      // Remonter la position du curseur
+      write(STDERR_FILENO, "\033[u", 3);
+      // Effacer la ligne
+      write(STDERR_FILENO, "\033[K", 3);
+      // Lire une nouvelle ligne
+      line = custom_readline("");
+
     }
-    else
+    // Supprimer les espaces en trop
+    char *cleaned_line = trim_and_reduce_spaces(line);
+    add_history(line);
+    // splited = split(ligne,' ');
+    splited = str_split(cleaned_line, ' ');
+    free(cleaned_line);
+    cleaned_line = NULL;
+    // if ((args = strtok(ligne, " "))) {
+    //     printf("%s\n",args);
+    //     args = strtok(NULL, " ");
+    //     printf("%s\n",args);
+    // }
+
+    // Simplement afficher les arguments pour tester
+    /*for (int i = 0; splited[i]; i++) {
+      printf("%s\n", splited[i]);
+    }*/
+    // Cases pour le lancement des commandes intégrées
+    if (strcmp(splited[0], "exit") == 0)
     {
-      add_history(ligne);
-      // splited = split(ligne,' ');
-      splited = str_split(ligne, ' ');
-      // if ((args = strtok(ligne, " "))) {
-      //     printf("%s\n",args);
-      //     args = strtok(NULL, " ");
-      //     printf("%s\n",args);
-      // }
-
-      // Simplement afficher les arguments pour tester
-      /*for (int i = 0; splited[i]; i++) {
-        printf("%s\n", splited[i]);
-      }*/
-      // Cases pour le lancement des commandes intégrées
-      if (strcmp(splited[0], "exit") == 0)
+      // Si on a un argument alors c'est la valeur de retour
+      if (splited[1])
       {
-        // Si on a un argument alors c'est la valeur de retour
-        if (splited[1])
-        {
-          last_return_value = atoi(splited[1]);
-          empty_command = 0;
-        }
-        free(ligne);
-        goto fin;
+        last_return_value = atoi(splited[1]);
       }
-      else if (strcmp(splited[0], "pwd") == 0)
-      {
-        last_return_value = execute_pwd();
-        empty_command = 0;
-      }
-      else if (strcmp(splited[0], "cd") == 0)
-      {
-        last_return_value = execute_cd(splited[1]);
-        empty_command = 0;
-      }
-
-      free(ligne);
-      free_split(splited);
+      free(line);
+      goto fin;
     }
+    else if (strcmp(splited[0], "pwd") == 0)
+    {
+      last_return_value = execute_pwd();
+    }
+    else if (strcmp(splited[0], "cd") == 0)
+    {
+      last_return_value = execute_cd(splited[1]);
+    }
+
+    free(line);
+    line = NULL;
+    free_split(splited);
+    splited = NULL;
   }
 
 // On libère la mémoire et on quitte
