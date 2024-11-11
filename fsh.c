@@ -172,6 +172,15 @@ int execute_cd(char *path)
       return 1;
     }
   }
+  else if (strcmp(path, "-") == 0)
+  {
+    path = getenv("OLDPWD");
+    if (path == NULL)
+    {
+      fprintf(stderr, "cd: OLDPWD not set\n");
+      return 1;
+    }
+  }
 
   // On doit savoir ou on est puis on change de répertoire
   char *current_dir = nom_repertoire_courant();
