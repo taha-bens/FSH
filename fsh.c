@@ -234,25 +234,74 @@ clean:
   return return_value;
 }
 
+char *chemin_du_fichier(char *file_name)
+{
+  DIR *dir = opendir(".");
+  struct dirent *entry;
+  char *path = NULL;
+  while ((entry = readdir(dir)) != NULL)
+  {
+    if (strcmp(entry->d_name, file_name) == 0)
+    {
+      path = malloc(strlen(file_name) + 3);
+      if (path == NULL)
+      {
+        perror("malloc");
+        return NULL;
+      }
+      snprintf(path, strlen(file_name) + 3, "./%s", file_name);
+      break;
+    }
+  }
+  closedir(dir);
+  return path;
+}
+
+int is_absolute_path(char *path)
+{
+  return path[0] == '/';
+}
+
 // Fonction pour afficher le type d'un fichier
 int ftype(char *file_name)
 {
   struct stat file_stat;
-  char abs_path[PATH_MAX];
+  char *path = NULL;
 
-  // Obtenir le chemin absolu du fichier
-  if (realpath(file_name, abs_path) == NULL)
+  if (file_name == NULL)
+  {
+    fprintf(stderr, "ftype: No such file or directory\n");
+    return 1;
+  }
+  if (is_absolute_path(file_name))
+  {
+    path = malloc(strlen(file_name) + 1);
+    if (path == NULL)
+    {
+      perror("malloc");
+      return 1;
+    }
+    strcpy(path, file_name);
+  }
+  else
+  {
+    path = chemin_du_fichier(file_name);
+  }
+  if (path == NULL)
   {
     fprintf(stderr, "ftype: No such file or directory\n");
     return 1;
   }
 
   // Obtenir les informations sur le fichier
-  if (lstat(abs_path, &file_stat) == -1)
+  if (lstat(path, &file_stat) == -1)
   {
     fprintf(stderr, "ftype: No such file or directory\n");
+    free(path);
     return 1;
   }
+  free(path);
+  path = NULL;
 
   // Afficher le type de fichier
   if (S_ISREG(file_stat.st_mode))
@@ -276,6 +325,144 @@ int ftype(char *file_name)
     printf("other\n");
   }
 
+  return 0;
+}
+
+int execute_for(char **args)
+{
+  int arg_count = 0;
+  while (args[arg_count] != NULL)
+  {
+    arg_count++;
+  }
+  if (arg_count < 6 || strcmp(args[0], "for") != 0 || strcmp(args[2], "in") != 0 || strcmp(args[4], "{") != 0 || strcmp(args[arg_count - 1], "}") != 0)
+  {
+    fprintf(stderr, "for: Invalid syntax\n");
+    return 1;
+  }
+
+  char *var_name = args[1];
+  char *dir_name = args[3];
+  char *command = args[5];
+  int show_all = 0;
+  int recursive = 0;
+  char *ext = NULL;
+  char *type = NULL;
+  int max_files = -1;
+
+  //OPTIONS j'ai mis la pour fill en attendant
+  for (int i = 6; i < arg_count - 1; i++)
+  {
+    if (strcmp(args[i], "-A") == 0)
+    {
+      show_all = 1;
+    }
+    else if (strcmp(args[i], "-r") == 0)
+    {
+      recursive = 1;
+    }
+    else if (strcmp(args[i], "-e") == 0 && i + 1 < arg_count - 1)
+    {
+      ext = args[++i];
+    }
+    else if (strcmp(args[i], "-t") == 0 && i + 1 < arg_count - 1)
+    {
+      type = args[++i];
+    }
+    else if (strcmp(args[i], "-p") == 0 && i + 1 < arg_count - 1)
+    {
+      max_files = atoi(args[++i]);
+    }
+  }
+
+  DIR *dir = opendir(dir_name);
+  if (dir == NULL)
+  {
+    perror("opendir");
+    return 1;
+  }
+
+  struct dirent *entry;
+  int file_count = 0;
+  while ((entry = readdir(dir)) != NULL)
+  {
+    if (!show_all && entry->d_name[0] == '.')
+    {
+      continue; // Fichiers cachés
+    }
+
+    if (ext != NULL)
+    {
+      char *dot = strrchr(entry->d_name, '.');
+      if (dot == NULL || strcmp(dot + 1, ext) != 0)
+      {
+        continue; // Fichiers qui n'ont pas l'extension spécifiée
+      }
+    }
+
+    if (type != NULL)
+    {
+      struct stat entry_stat;
+      char full_path[PATH_MAX];
+      snprintf(full_path, sizeof(full_path), "%s/%s", dir_name, entry->d_name);
+      if (stat(full_path, &entry_stat) == -1)
+      {
+        perror("stat");
+        continue;
+      }
+
+      if ((strcmp(type, "f") == 0 && !S_ISREG(entry_stat.st_mode)) ||
+          (strcmp(type, "d") == 0 && !S_ISDIR(entry_stat.st_mode)) ||
+          (strcmp(type, "l") == 0 && !S_ISLNK(entry_stat.st_mode)) ||
+          (strcmp(type, "p") == 0 && !S_ISFIFO(entry_stat.st_mode)))
+      {
+        continue; // Mauvais type de fichier
+      }
+    }
+
+    if (max_files != -1 && file_count >= max_files)
+    {
+      break; // Limite de fichiers atteinte
+    }
+
+    char cmd[1024];
+    char *new_args[3];
+    new_args[0] = command;
+    new_args[1] = entry->d_name;
+    new_args[2] = NULL;
+    snprintf(cmd, sizeof(cmd), "%s %s", command, entry->d_name);
+    // Commande interne
+    if (strcmp(command, "ftype") == 0)
+    {
+      ftype(new_args[1]);
+      continue;
+    }
+    // Commande externe
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+      // Enfant : exécuter la commande dans un shell
+      execlp("sh", "sh", "-c", cmd, (char *)NULL);
+      perror("execlp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid < 0)
+    {
+      perror("fork");
+      closedir(dir);
+      return 1;
+    }
+    else
+    {
+      // Parent : attendre l'enfant
+      int status;
+      waitpid(pid, &status, 0);
+    }
+
+    file_count++;
+  }
+
+  closedir(dir);
   return 0;
 }
 
@@ -375,7 +562,7 @@ int main()
     free(prompt_dir);
     // Afficher le prompt
     char *line = readline(formated_promt);
-    // Ligne qui contient uniquement le caractère de fin de ligne 
+    // Ligne qui contient uniquement le caractère de fin de ligne
     if (line == NULL || line[0] == '\0')
     {
       free(line);
@@ -383,7 +570,8 @@ int main()
       exit(last_return_value);
     }
     // Si la ligne a que des espaces alors on la libère et on recommence
-    while(strlen(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '\n') {
+    while (strlen(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '\n')
+    {
       free(line);
       line = readline(formated_promt);
       if (line[0] == '\0')
@@ -432,6 +620,10 @@ int main()
     else if (strcmp(splited[0], "ftype") == 0)
     {
       last_return_value = ftype(splited[1]);
+    }
+    else if (strcmp(splited[0] , "for") == 0)
+    {
+      last_return_value = execute_for(splited);
     }
 
     free(line);
