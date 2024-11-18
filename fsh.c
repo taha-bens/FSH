@@ -234,27 +234,29 @@ clean:
   return return_value;
 }
 
-char *chemin_du_fichier(char *file_name)
-{
-  DIR *dir = opendir(".");
-  struct dirent *entry;
-  char *path = NULL;
-  while ((entry = readdir(dir)) != NULL)
-  {
-    if (strcmp(entry->d_name, file_name) == 0)
-    {
-      path = malloc(strlen(file_name) + 3);
-      if (path == NULL)
-      {
-        perror("malloc");
+char *chemin_du_fichier(char *dir_name, char *file_name) {
+    DIR *dir = opendir(dir_name);
+    if (dir == NULL) {
+        perror("opendir");
         return NULL;
-      }
-      snprintf(path, strlen(file_name) + 3, "./%s", file_name);
-      break;
     }
-  }
-  closedir(dir);
-  return path;
+
+    struct dirent *entry;
+    char *path = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, file_name) == 0) {
+            path = malloc(strlen(dir_name) + strlen(file_name) + 3);
+            if (path == NULL) {
+                perror("malloc");
+                closedir(dir);
+                return NULL;
+            }
+            snprintf(path, strlen(dir_name) + strlen(file_name) + 3, "%s/%s", dir_name, file_name);
+            break;
+        }
+    }
+    closedir(dir);
+    return path;
 }
 
 int is_absolute_path(char *path)
@@ -263,7 +265,7 @@ int is_absolute_path(char *path)
 }
 
 // Fonction pour afficher le type d'un fichier
-int ftype(char *file_name)
+int ftype(char *file_name, char *dir_name)
 {
   struct stat file_stat;
   char *path = NULL;
@@ -285,7 +287,7 @@ int ftype(char *file_name)
   }
   else
   {
-    path = chemin_du_fichier(file_name);
+    path = chemin_du_fichier(dir_name, file_name);
   }
   if (path == NULL)
   {
@@ -434,7 +436,7 @@ int execute_for(char **args)
     // Commande interne
     if (strcmp(command, "ftype") == 0)
     {
-      ftype(new_args[1]);
+      ftype(new_args[1], dir_name);
       continue;
     }
     // Commande externe
@@ -619,7 +621,7 @@ int main()
     }
     else if (strcmp(splited[0], "ftype") == 0)
     {
-      last_return_value = ftype(splited[1]);
+      last_return_value = ftype(splited[1], ".");
     }
     else if (strcmp(splited[0] , "for") == 0)
     {
