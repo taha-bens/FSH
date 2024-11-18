@@ -234,29 +234,34 @@ clean:
   return return_value;
 }
 
-char *chemin_du_fichier(char *dir_name, char *file_name) {
-    DIR *dir = opendir(dir_name);
-    if (dir == NULL) {
-        perror("opendir");
-        return NULL;
-    }
+char *chemin_du_fichier(char *dir_name, char *file_name)
+{
+  DIR *dir = opendir(dir_name);
+  if (dir == NULL)
+  {
+    perror("opendir");
+    return NULL;
+  }
 
-    struct dirent *entry;
-    char *path = NULL;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, file_name) == 0) {
-            path = malloc(strlen(dir_name) + strlen(file_name) + 3);
-            if (path == NULL) {
-                perror("malloc");
-                closedir(dir);
-                return NULL;
-            }
-            snprintf(path, strlen(dir_name) + strlen(file_name) + 3, "%s/%s", dir_name, file_name);
-            break;
-        }
+  struct dirent *entry;
+  char *path = NULL;
+  while ((entry = readdir(dir)) != NULL)
+  {
+    if (strcmp(entry->d_name, file_name) == 0)
+    {
+      path = malloc(strlen(dir_name) + strlen(file_name) + 3);
+      if (path == NULL)
+      {
+        perror("malloc");
+        closedir(dir);
+        return NULL;
+      }
+      snprintf(path, strlen(dir_name) + strlen(file_name) + 3, "%s/%s", dir_name, file_name);
+      break;
     }
-    closedir(dir);
-    return path;
+  }
+  closedir(dir);
+  return path;
 }
 
 int is_absolute_path(char *path)
@@ -352,7 +357,7 @@ int execute_for(char **args)
   char *type = NULL;
   int max_files = -1;
 
-  //OPTIONS j'ai mis la pour fill en attendant
+  // OPTIONS j'ai mis la pour fill en attendant
   for (int i = 6; i < arg_count - 1; i++)
   {
     if (strcmp(args[i], "-A") == 0)
@@ -564,24 +569,30 @@ int main()
     free(prompt_dir);
     // Afficher le prompt
     char *line = readline(formated_promt);
-    // Ligne qui contient uniquement le caractère de fin de ligne
-    if (line == NULL || line[0] == '\0')
+    // Ligne qui s'est fait EOF
+    if (line == NULL)
     {
-      free(line);
       // Arrêter la boucle et quitter
       exit(last_return_value);
     }
+    int notEmpty = 0;
     // Si la ligne a que des espaces alors on la libère et on recommence
-    while (strlen(line) == 0 || line[0] == ' ' || line[0] == '\t' || line[0] == '\n')
+    for (int i = 0; line[i]; i++)
+    {
+      if (line[i] != ' ' && line[i] != '\t' && line[i] != '\n')
+      {
+        notEmpty = 1;
+        break;
+      }
+      if (line[i + 1] == '\0')
+      {
+        break;
+      }
+    }
+    if (!notEmpty)
     {
       free(line);
-      line = readline(formated_promt);
-      if (line[0] == '\0')
-      {
-        free(line);
-        // Arrêter la boucle et quitter
-        exit(last_return_value);
-      }
+      continue;
     }
     // Supprimer les espaces en trop
     char *cleaned_line = trim_and_reduce_spaces(line);
@@ -623,9 +634,42 @@ int main()
     {
       last_return_value = ftype(splited[1], ".");
     }
-    else if (strcmp(splited[0] , "for") == 0)
+    else if (strcmp(splited[0], "for") == 0)
     {
       last_return_value = execute_for(splited);
+    }
+    else
+    {
+      // Commande externe
+      pid_t pid = fork();
+      if (pid == 0)
+      {
+        // Enfant : exécuter la commande
+        execvp(splited[0], splited);
+        perror("execvp");
+        exit(EXIT_FAILURE);
+      }
+      else if (pid < 0)
+      {
+        perror("fork");
+        free(line);
+        free_split(splited);
+        continue;
+      }
+      else
+      {
+        // Parent : attendre l'enfant
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status))
+        {
+          last_return_value = WEXITSTATUS(status);
+        }
+        else
+        {
+          last_return_value = 1;
+        }
+      }
     }
 
     free(line);
