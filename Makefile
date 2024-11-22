@@ -5,7 +5,7 @@ CC ?= gcc
 CCFLAGS ?= -Wall -g3 -fsanitize=address
 
 # Headers
-HEADERS = pwd.h
+HEADERS = pwd.h ftype.h cd.h for.h
 
 # Shared libraries
 SHLIBS ?= -lreadline 
@@ -14,15 +14,21 @@ SHLIBS ?= -lreadline
 all: fsh
 
 # Rule to build the executable
-fsh: fsh.c pwd.o
+fsh: fsh.c pwd.o ftype.o cd.o for.o
 	$(CC) $(CCFLAGS) -o $@ $^ $(SHLIBS)
 
 # Rule to compile the source file into an object file
 pwd.o: pwd.c
 	$(CC) $(CCFLAGS) -c $< 
 
-#pwd: pwd.o
-#	$(CC) $(CCFLAGS) -o $@ $^
+ftype.o: ftype.c
+	$(CC) $(CCFLAGS) -c $<
+
+cd.o: cd.c
+	$(CC) $(CCFLAGS) -c $<
+
+for.o: for.c
+	$(CC) $(CCFLAGS) -c $<
 
 # Clean target
 clean:
