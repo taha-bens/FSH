@@ -320,6 +320,8 @@ int main()
         // Enfant : exécuter la commande
         execvp(splited[0], splited);
         fprintf(stderr, "redirect_exec: No such file or directory\n");
+        free(line);
+        free_split(splited);
         exit(EXIT_FAILURE);
       }
       else if (pid < 0)
