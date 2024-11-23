@@ -319,7 +319,7 @@ int main()
       {
         // Enfant : exécuter la commande
         execvp(splited[0], splited);
-        perror("execvp");
+        fprintf(stderr, "redirect_exec: No such file or directory\n");
         exit(EXIT_FAILURE);
       }
       else if (pid < 0)

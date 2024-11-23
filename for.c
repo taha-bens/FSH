@@ -11,6 +11,26 @@
 
 #define PATH_MAX 4096
 
+// Structure pour suivre les arguments et leur type d'allocation
+typedef struct
+{
+    char *arg;
+    int dynamic; // 1 si l'argument est alloué dynamiquement, 0 sinon
+} Arg;
+
+// Fonction pour libérer les arguments
+void free_args(Arg *args, int count)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (args[i].dynamic)
+        {
+            free(args[i].arg);
+        }
+    }
+    free(args);
+}
+
 int execute_for(char **args)
 {
     int arg_count = 0;
@@ -32,7 +52,7 @@ int execute_for(char **args)
     char *type = NULL;
     int max_files = -1;
 
-    // OPTIONS j'ai mis la pour fill en attendant
+    // OPTIONS
     for (int i = 6; i < arg_count - 1; i++)
     {
         if (strcmp(args[i], "-A") == 0)
@@ -57,6 +77,13 @@ int execute_for(char **args)
         }
     }
 
+    char start_dir[PATH_MAX];
+    if (getcwd(start_dir, sizeof(start_dir)) == NULL)
+    {
+        perror("getcwd");
+        return 1;
+    }
+
     DIR *dir = opendir(dir_name);
     if (dir == NULL)
     {
@@ -70,24 +97,20 @@ int execute_for(char **args)
     while ((entry = readdir(dir)) != NULL)
     {
         if (!show_all && entry->d_name[0] == '.')
-        {
-            continue; // Fichiers cachés
-        }
+            continue;
 
         if (ext != NULL)
         {
             char *dot = strrchr(entry->d_name, '.');
             if (dot == NULL || strcmp(dot + 1, ext) != 0)
-            {
-                continue; // Fichiers qui n'ont pas l'extension spécifiée
-            }
+                continue;
         }
 
         if (type != NULL)
         {
             struct stat entry_stat;
             char full_path[PATH_MAX];
-            snprintf(full_path, sizeof(full_path), "%s/%s", dir_name, entry->d_name);
+            snprintf(full_path, sizeof(full_path), "%s/%s", args[3], entry->d_name);
             if (stat(full_path, &entry_stat) == -1)
             {
                 perror("stat");
@@ -100,18 +123,20 @@ int execute_for(char **args)
                 (strcmp(type, "l") == 0 && !S_ISLNK(entry_stat.st_mode)) ||
                 (strcmp(type, "p") == 0 && !S_ISFIFO(entry_stat.st_mode)))
             {
-                continue; // Mauvais type de fichier
+                continue;
             }
         }
 
         if (max_files != -1 && file_count >= max_files)
-        {
-            break; // Limite de fichiers atteinte
-        }
+            break;
+
+        // Construire le chemin absolu du fichier depuis start_dir
+        char file_path[PATH_MAX];
+        snprintf(file_path, sizeof(file_path), "%s/%s", args[3], entry->d_name);
 
         // Construire les arguments de la commande
-        int cmd_arg_count = arg_count - 6; // Exclure "for", var_name, "in", dir_name, "{", "}"
-        char **new_args = malloc((cmd_arg_count + 2) * sizeof(char *)); // +2 pour le fichier et NULL
+        int cmd_arg_count = arg_count - 6;
+        Arg *new_args = malloc((cmd_arg_count + 1) * sizeof(Arg));
         if (new_args == NULL)
         {
             perror("malloc");
@@ -124,44 +149,76 @@ int execute_for(char **args)
         {
             if (strcmp(args[i], var_name) == 0 || (args[i][0] == '$' && strcmp(args[i] + 1, var_name) == 0))
             {
-                new_args[j++] = entry->d_name;
+                new_args[j].arg = strdup(file_path); // Allocation dynamique
+                new_args[j].dynamic = 1;
             }
             else
             {
-                new_args[j++] = args[i];
+                new_args[j].arg = args[i];
+                new_args[j].dynamic = 0;
             }
+            j++;
         }
-        new_args[j] = NULL;
-
-        // Afficher l'argument pour le débogage
-        fprintf(stderr, "%s\n", new_args[1]);
+        new_args[j].arg = NULL; // Marquer la fin des arguments
+        new_args[j].dynamic = 0;
 
         // Commande interne
-        if (strcmp(new_args[0], "ftype") == 0)
+        if (strcmp(new_args[0].arg, "ftype") == 0)
         {
-            if (ftype(new_args[1], dir_name) != 0)
+            // Supprimer la partie inutile de new_args[1] puisque on execute ftype à partir de dir_name
+            char *file_name = strrchr(new_args[1].arg, '/');
+            if (file_name == NULL)
             {
-                free(new_args);
+                file_name = new_args[1].arg;
+            }
+            else
+            {
+                file_name++;
+            }
+            if (ftype(file_name, dir_name) != 0)
+            {
+                free_args(new_args, j);
                 closedir(dir);
                 return 1;
             }
-            free(new_args);
+            free_args(new_args, j);
             continue;
         }
+
+        // Convertir les arguments pour execvp
+        char **exec_args = malloc((j + 1) * sizeof(char *));
+        for (int k = 0; k < j; k++)
+        {
+            exec_args[k] = new_args[k].arg;
+        }
+        exec_args[j] = NULL;
 
         // Commande externe
         pid_t pid = fork();
         if (pid == 0)
         {
-            // Enfant : exécuter la commande
-            execvp(new_args[0], new_args);
+            // Enfant : exécuter la commande dans le répertoire de départ
+            if (chdir(start_dir) == -1)
+            {
+                perror("chdir");
+                free_args(new_args, j);
+                free(exec_args);
+                closedir(dir);
+                exit(EXIT_FAILURE);
+            }
+
+            execvp(exec_args[0], exec_args);
             perror("execvp");
+            free_args(new_args, j);
+            free(exec_args);
+            closedir(dir);
             exit(EXIT_FAILURE);
         }
         else if (pid < 0)
         {
             perror("fork");
-            free(new_args);
+            free_args(new_args, j);
+            free(exec_args);
             closedir(dir);
             return 1;
         }
@@ -175,20 +232,23 @@ int execute_for(char **args)
                 last_return_value = WEXITSTATUS(status);
                 if (last_return_value != 0)
                 {
-                    free(new_args);
+                    free_args(new_args, j);
+                    free(exec_args);
                     closedir(dir);
                     return 1;
                 }
             }
             else
             {
-                free(new_args);
+                free_args(new_args, j);
+                free(exec_args);
                 closedir(dir);
                 return 1;
             }
         }
 
-        free(new_args);
+        free_args(new_args, j);
+        free(exec_args);
         file_count++;
     }
 
