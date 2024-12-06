@@ -171,18 +171,10 @@ char* nom_repertoire_courant() {
     return resultat;
 }
 
-// Petit test pour vérifier que tout fonctionne
+// Commande pwd
 int pwd() {
     char *chemin = chemin_du_repertoire();
-    printf("Chemin absolu: %s\n", chemin);
-    free(chemin);
-    char *name = nom_repertoire_courant();
-    if (name == NULL) return 1;
-    printf("Nom du répertoire courant: %s\n", name);
-    free(name);
+    write(STDOUT_FILENO, chemin, strlen(chemin));
+    write(STDOUT_FILENO, "\n", 1);
     return 0;
 }
-
-//int main(){
-//    pwd();
-//}

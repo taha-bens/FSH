@@ -83,71 +83,6 @@ void free_split(char **splited)
   free(splited);
 }
 
-// Fonction pour exécuter la commande pwd
-// On utilise ici un pipe pour communiquer entre le processus shell et le
-// processus pwd Rappelons que le processus shell est le processus parent stocké
-// dans pipe_pwd[1] et le processus pwd est le processus enfant stocké dans
-// pipe_pwd[0] Par ailleurs, le pid de l'enfant est égal à 0 car fork() retourne
-// 0 pour le processus enfant
-int execute_pwd()
-{
-  int pipe_pwd[2];
-
-  if (pipe(pipe_pwd) == -1)
-  {
-    perror("pipe");
-    return -1;
-  }
-
-  pid_t pid = fork();
-
-  if (pid == -1)
-  {
-    perror("fork");
-    return 1;
-  }
-  if (pid == 0)
-  {
-    // Processus enfant cad pwd
-    close(pipe_pwd[0]);               // Fermer le côté lecture du pipe
-    dup2(pipe_pwd[1], STDOUT_FILENO); // Rediriger stdout vers le pipe
-    close(pipe_pwd[1]);               // Fermer le côté écriture du pipe
-
-    execlp("pwd", "pwd", (char *)NULL);
-    perror("execlp");
-    exit(EXIT_FAILURE);
-  }
-  else
-  {
-    // Processus parent cad le shell
-    close(pipe_pwd[1]); // Fermer le côté écriture du pipe
-
-    char buffer[SIZE_PWDBUF];
-    ssize_t count = read(pipe_pwd[0], buffer, SIZE_PWDBUF - 1);
-    if (count == -1)
-    {
-      perror("read");
-      close(pipe_pwd[0]);
-      return 1;
-    }
-    buffer[count] = '\0'; // Ne jamais oublier ce fichu caractère null
-
-    close(pipe_pwd[0]);
-
-    int status;
-    waitpid(pid, &status, 0);
-    if (WIFEXITED(status))
-    {
-      printf("%s", buffer); // Afficher le chemin absolu
-      return WEXITSTATUS(status);
-    }
-    else
-    {
-      return 1;
-    }
-  }
-}
-
 char *trim_and_reduce_spaces(const char *str)
 {
   if (str == NULL)
@@ -285,7 +220,7 @@ int main()
       }
       else if (strcmp(splited[0], "pwd") == 0)
       {
-        last_return_value = execute_pwd();
+        last_return_value = pwd();
       }
       else if (strcmp(splited[0], "cd") == 0)
       {
