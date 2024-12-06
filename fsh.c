@@ -251,27 +251,14 @@ int main()
       // Arrêter la boucle et quitter
       exit(last_return_value);
     }
-    int notEmpty = 0;
-    // Si la ligne a que des espaces alors on la libère et on recommence
-    for (int i = 0; line[i]; i++)
-    {
-      if (line[i] != ' ' && line[i] != '\t' && line[i] != '\n')
-      {
-        notEmpty = 1;
-        break;
-      }
-      if (line[i + 1] == '\0')
-      {
-        break;
-      }
-    }
-    if (!notEmpty)
-    {
-      free(line);
-      continue;
-    }
     // Supprimer les espaces en trop
     char *cleaned_line = trim_and_reduce_spaces(line);
+    if (strlen(cleaned_line) == 0)
+    {
+      free(line);
+      free(cleaned_line);
+      continue;
+    }
     add_history(line);
     // Diviser la ligne en commandes séparées par des points-virgules
     char **commands = str_split(cleaned_line, ';');
