@@ -50,7 +50,7 @@ char **str_split(char *a_str, const char a_delim)
   /* Ajoute un token pour le cas ou la chaine est vide */
   count++;
 
-  result = malloc(sizeof(char *) * count);
+  result = malloc(sizeof(char *) * (count + 1));
 
   if (result)
   {
@@ -60,11 +60,14 @@ char **str_split(char *a_str, const char a_delim)
     while (token)
     {
       assert(idx < count);
-      *(result + idx++) = strdup(token);
+      result[idx++] = strdup(token);
       token = strtok(0, delim);
     }
-    assert(idx == count - 1);
-    *(result + idx) = 0;
+    if (idx == 0)
+    {
+      result[idx++] = strdup(a_str);
+    }
+    result[idx] = 0;
   }
 
   return result;
@@ -270,87 +273,91 @@ int main()
     // Supprimer les espaces en trop
     char *cleaned_line = trim_and_reduce_spaces(line);
     add_history(line);
-    // splited = split(ligne,' ');
-    splited = str_split(cleaned_line, ' ');
+    // Diviser la ligne en commandes séparées par des points-virgules
+    char **commands = str_split(cleaned_line, ';');
     free(cleaned_line);
     cleaned_line = NULL;
-    // if ((args = strtok(ligne, " "))) {
-    //     printf("%s\n",args);
-    //     args = strtok(NULL, " ");
-    //     printf("%s\n",args);
-    // }
 
-    // Simplement afficher les arguments pour tester
-    /*for (int i = 0; splited[i]; i++) {
-      printf("%s\n", splited[i]);
-    }*/
-    // Cases pour le lancement des commandes intégrées
-    if (strcmp(splited[0], "exit") == 0)
+    // Exécuter chaque commande séparément
+    for (int cmd_idx = 0; commands[cmd_idx]; cmd_idx++)
     {
-      // Si on a un argument alors c'est la valeur de retour
-      if (splited[1])
+      // Diviser la commande en arguments
+      splited = str_split(commands[cmd_idx], ' ');
+
+      // Cases pour le lancement des commandes intégrées
+      if (strcmp(splited[0], "exit") == 0)
       {
-        last_return_value = atoi(splited[1]);
-      }
-      free(line);
-      goto fin;
-    }
-    else if (strcmp(splited[0], "pwd") == 0)
-    {
-      last_return_value = execute_pwd();
-    }
-    else if (strcmp(splited[0], "cd") == 0)
-    {
-      last_return_value = execute_cd(splited[1]);
-    }
-    else if (strcmp(splited[0], "ftype") == 0)
-    {
-      last_return_value = ftype(splited[1], ".");
-    }
-    else if (strcmp(splited[0], "for") == 0)
-    {
-      last_return_value = execute_for(splited);
-    }
-    else
-    {
-      // Commande externe
-      pid_t pid = fork();
-      if (pid == 0)
-      {
-        // Enfant : exécuter la commande
-        execvp(splited[0], splited);
-        fprintf(stderr, "redirect_exec: No such file or directory\n");
+        // Si on a un argument alors c'est la valeur de retour
+        if (splited[1])
+        {
+          last_return_value = atoi(splited[1]);
+        }
         free(line);
-        free_split(splited);
-        exit(EXIT_FAILURE);
+        free_split(commands);
+        goto fin;
       }
-      else if (pid < 0)
+      else if (strcmp(splited[0], "pwd") == 0)
       {
-        perror("fork");
-        free(line);
-        free_split(splited);
-        continue;
+        last_return_value = execute_pwd();
+      }
+      else if (strcmp(splited[0], "cd") == 0)
+      {
+        last_return_value = execute_cd(splited[1]);
+      }
+      else if (strcmp(splited[0], "ftype") == 0)
+      {
+        last_return_value = ftype(splited[1], ".");
+      }
+      else if (strcmp(splited[0], "for") == 0)
+      {
+        last_return_value = execute_for(splited);
       }
       else
       {
-        // Parent : attendre l'enfant
-        int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status))
+        // Commande externe
+        pid_t pid = fork();
+        if (pid == 0)
         {
-          last_return_value = WEXITSTATUS(status);
+          // Enfant : exécuter la commande
+          execvp(splited[0], splited);
+          fprintf(stderr, "redirect_exec: No such file or directory\n");
+          free(line);
+          free_split(splited);
+          free_split(commands);
+          exit(EXIT_FAILURE);
+        }
+        else if (pid < 0)
+        {
+          perror("fork");
+          free(line);
+          free_split(splited);
+          free_split(commands);
+          continue;
         }
         else
         {
-          last_return_value = 1;
+          // Parent : attendre l'enfant
+          int status;
+          waitpid(pid, &status, 0);
+          if (WIFEXITED(status))
+          {
+            last_return_value = WEXITSTATUS(status);
+          }
+          else
+          {
+            last_return_value = 1;
+          }
         }
       }
+
+      free_split(splited);
+      splited = NULL;
     }
 
     free(line);
     line = NULL;
-    free_split(splited);
-    splited = NULL;
+    free_split(commands);
+    commands = NULL;
   }
 
 // On libère la mémoire et on quitte
