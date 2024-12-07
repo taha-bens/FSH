@@ -176,5 +176,6 @@ int pwd() {
     char *chemin = chemin_du_repertoire();
     write(STDOUT_FILENO, chemin, strlen(chemin));
     write(STDOUT_FILENO, "\n", 1);
+    free(chemin);
     return 0;
 }

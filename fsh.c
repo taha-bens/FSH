@@ -30,7 +30,7 @@ void create_dir_prompt_name(char *prompt, const char *current_dir);
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
 int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
-void execute_command(char **splited, int *last_return_value);
+void execute_command(char **splited, int *last_return_value, char ***commands, char **line);
 void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value);
 
 int main()
@@ -91,7 +91,7 @@ int main()
       }
 
       // Exécuter la commande
-      execute_command(splited, &last_return_value);
+      execute_command(splited, &last_return_value, &commands, &line);
 
       // Restaurer les descripteurs de fichiers d'origine
       restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
@@ -251,30 +251,33 @@ void create_prompt(char *prompt, const char *current_dir, int last_return_value)
 
 int handle_redirections(char **splited, int *last_return_value)
 {
-  int input_fd = -1, output_fd = -1, append_fd = -1, error_fd = -1;
   for (int i = 0; splited[i] != NULL; i++)
   {
     char *redirection = NULL;
+    int fd = -1;
 
     // Vérifier les redirections avec des descripteurs spécifiques
     if (strstr(splited[i], ">") != NULL || strstr(splited[i], "<") != NULL)
     {
       if (isdigit(splited[i][0]))
       {
+        fd = atoi(splited[i]);
         redirection = &splited[i][1];
       }
       else
       {
+        fd = (strstr(splited[i], "<") != NULL) ? STDIN_FILENO : STDOUT_FILENO;
         redirection = splited[i];
       }
     }
 
     if (redirection != NULL && splited[i + 1] != NULL)
     {
+      int file_fd = -1;
       if (strcmp(redirection, "<") == 0)
       {
-        input_fd = open(splited[i + 1], O_RDONLY);
-        if (input_fd == -1)
+        file_fd = open(splited[i + 1], O_RDONLY);
+        if (file_fd == -1)
         {
           perror("open");
           *last_return_value = 1;
@@ -289,8 +292,8 @@ int handle_redirections(char **splited, int *last_return_value)
           *last_return_value = 1;
           return -1;
         }
-        output_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (output_fd == -1)
+        file_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0664);
+        if (file_fd == -1)
         {
           perror("open");
           *last_return_value = 1;
@@ -299,8 +302,8 @@ int handle_redirections(char **splited, int *last_return_value)
       }
       else if (strcmp(redirection, ">>") == 0)
       {
-        append_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (append_fd == -1)
+        file_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0664);
+        if (file_fd == -1)
         {
           perror("open");
           *last_return_value = 1;
@@ -309,50 +312,26 @@ int handle_redirections(char **splited, int *last_return_value)
       }
       else if (strcmp(redirection, ">|") == 0)
       {
-        output_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (output_fd == -1)
+        file_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0664);
+        if (file_fd == -1)
         {
           perror("open");
           *last_return_value = 1;
           return -1;
         }
       }
-      else if (strcmp(redirection, "2>") == 0)
+
+      // Configurer la redirection
+      if (file_fd != -1)
       {
-        if (access(splited[i + 1], F_OK) == 0)
-        {
-          fprintf(stderr, "pipeline_run: File exists\n");
-          *last_return_value = 1;
-          return -1;
-        }
-        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (error_fd == -1)
-        {
-          perror("open");
-          *last_return_value = 1;
-          return -1;
-        }
+        dup2(file_fd, fd);
+        close(file_fd);
       }
-      else if (strcmp(redirection, "2>>") == 0)
-      {
-        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
-        if (error_fd == -1)
-        {
-          perror("open");
-          *last_return_value = 1;
-          return -1;
-        }
-      }
-      else if (strcmp(redirection, "2>|") == 0)
-      {
-        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (error_fd == -1)
-        {
-          perror("open");
-          *last_return_value = 1;
-          return -1;
-        }
-      }
+
+      // Supprimer les redirections des arguments
+      free(splited[i]);
+      free(splited[i + 1]);
+      splited[i] = NULL;
 
       // Supprimer les redirections des arguments
       for (int j = i; splited[j - 1] != NULL; j++)
@@ -361,28 +340,6 @@ int handle_redirections(char **splited, int *last_return_value)
       }
       i--;
     }
-  }
-
-  // Configurer les redirections
-  if (input_fd != -1)
-  {
-    dup2(input_fd, STDIN_FILENO);
-    close(input_fd);
-  }
-  if (output_fd != -1)
-  {
-    dup2(output_fd, STDOUT_FILENO);
-    close(output_fd);
-  }
-  if (append_fd != -1)
-  {
-    dup2(append_fd, STDOUT_FILENO);
-    close(append_fd);
-  }
-  if (error_fd != -1)
-  {
-    dup2(error_fd, STDERR_FILENO);
-    close(error_fd);
   }
 
   return 0;
@@ -398,7 +355,7 @@ void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr)
   close(saved_stderr);
 }
 
-void execute_command(char **splited, int *last_return_value)
+void execute_command(char **splited, int *last_return_value, char ***commands, char **line)
 {
   if (strcmp(splited[0], "exit") == 0)
   {
@@ -407,7 +364,7 @@ void execute_command(char **splited, int *last_return_value)
     {
       *last_return_value = atoi(splited[1]);
     }
-    cleanup_and_exit(NULL, NULL, splited, *last_return_value);
+    cleanup_and_exit(*line, *commands, splited, *last_return_value);
   }
   else if (strcmp(splited[0], "pwd") == 0)
   {
