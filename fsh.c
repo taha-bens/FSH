@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -18,9 +19,92 @@
 
 #define RESET_COLOR "\033[00m"
 #define RED_COLOR "\033[91m"
-#define MAX_LENGTH_PROMT 30 + sizeof(RED_COLOR) + sizeof(RESET_COLOR)
+#define MAX_LENGTH_PROMPT 30 + sizeof(RED_COLOR) + sizeof(RESET_COLOR)
 #define SIZE_PWDBUF 1024
 #define PATH_MAX 4096
+
+char **str_split(char *a_str, const char a_delim);
+void free_split(char **splited);
+char *trim_and_reduce_spaces(const char *str);
+void create_dir_prompt_name(char *prompt, const char *current_dir);
+void create_prompt(char *prompt, const char *current_dir, int last_return_value);
+int handle_redirections(char **splited, int *last_return_value);
+void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
+void execute_command(char **splited, int *last_return_value);
+void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value);
+
+int main()
+{
+  int last_return_value = 0;
+  char formatted_prompt[MAX_LENGTH_PROMPT];
+  char *line;
+
+  rl_outstream = stderr;
+
+  while (1)
+  {
+    char *current_dir = chemin_du_repertoire();
+    if (current_dir == NULL)
+    {
+      perror("chemin_du_repertoire");
+      return 1;
+    }
+
+    char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
+    create_dir_prompt_name(prompt_dir, current_dir);
+    create_prompt(formatted_prompt, prompt_dir, last_return_value);
+    free(current_dir);
+    free(prompt_dir);
+
+    line = readline(formatted_prompt);
+    if (line == NULL)
+    {
+      exit(last_return_value);
+    }
+
+    char *cleaned_line = trim_and_reduce_spaces(line);
+    if (strlen(cleaned_line) == 0)
+    {
+      free(line);
+      free(cleaned_line);
+      continue;
+    }
+
+    add_history(line);
+    char **commands = str_split(cleaned_line, ';');
+    free(cleaned_line);
+
+    for (int cmd_idx = 0; commands[cmd_idx]; cmd_idx++)
+    {
+      char **splited = str_split(commands[cmd_idx], ' ');
+
+      // Sauvegarder les descripteurs de fichiers d'origine
+      int saved_stdin = dup(STDIN_FILENO);
+      int saved_stdout = dup(STDOUT_FILENO);
+      int saved_stderr = dup(STDERR_FILENO);
+
+      // Gestion des redirections
+      if (handle_redirections(splited, &last_return_value) == -1)
+      {
+        free_split(splited);
+        continue;
+      }
+
+      // Exécuter la commande
+      execute_command(splited, &last_return_value);
+
+      // Restaurer les descripteurs de fichiers d'origine
+      restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
+
+      free_split(splited);
+    }
+
+    free(line);
+    free_split(commands);
+  }
+
+  return 0;
+}
 
 // Split une chaine de caractères en fonction d'un délimiteur
 char **str_split(char *a_str, const char a_delim)
@@ -139,151 +223,237 @@ char *trim_and_reduce_spaces(const char *str)
   return new_str;
 }
 
-int main()
+void create_dir_prompt_name(char *prompt, const char *current_dir)
 {
-  int last_return_value = 0;
-  char formated_promt[MAX_LENGTH_PROMT];
-  char **splited;
-  char *line;
-  // Rediriger stdout vers stderr pour les tests
-  rl_outstream = stderr;
-  while (1)
+  if (strlen(current_dir) > 22)
   {
-    char *current_dir = chemin_du_repertoire();
-    char *prompt_dir = malloc(MAX_LENGTH_PROMT);
-    // Prendre uniquement les 30 derniers caractères du chemin
-    if (strlen(current_dir) > 22)
-    {
-      snprintf(prompt_dir, MAX_LENGTH_PROMT, "...%s",
-               current_dir + strlen(current_dir) - 22);
-    }
-    else
-    {
-      snprintf(prompt_dir, MAX_LENGTH_PROMT, "%s", current_dir);
-    }
-    if (current_dir == NULL)
-    {
-      perror("chemin_du_repertoire");
-      return 1;
-    }
-    if (last_return_value == 0)
-    {
-      snprintf(formated_promt, MAX_LENGTH_PROMT, "[%d]%s$ ", last_return_value,
-               prompt_dir);
-    }
-    else if (last_return_value != 0)
-    {
-      snprintf(formated_promt, MAX_LENGTH_PROMT, "[%s%d%s]%s$ ", RED_COLOR,
-               last_return_value, RESET_COLOR, prompt_dir);
-    }
-    free(current_dir);
-    free(prompt_dir);
-    // Afficher le prompt
-    line = readline(formated_promt);
-    // Ligne qui s'est fait EOF
-    if (line == NULL)
-    {
-      // Arrêter la boucle et quitter
-      exit(last_return_value);
-    }
-    // Supprimer les espaces en trop
-    char *cleaned_line = trim_and_reduce_spaces(line);
-    if (strlen(cleaned_line) == 0)
-    {
-      free(line);
-      free(cleaned_line);
-      continue;
-    }
-    add_history(line);
-    // Diviser la ligne en commandes séparées par des points-virgules
-    char **commands = str_split(cleaned_line, ';');
-    free(cleaned_line);
-    cleaned_line = NULL;
+    snprintf(prompt, MAX_LENGTH_PROMPT, "...%s", current_dir + strlen(current_dir) - 22);
+  }
+  else
+  {
+    snprintf(prompt, MAX_LENGTH_PROMPT, "%s", current_dir);
+  }
+}
 
-    // Exécuter chaque commande séparément
-    for (int cmd_idx = 0; commands[cmd_idx]; cmd_idx++)
-    {
-      // Diviser la commande en arguments
-      splited = str_split(commands[cmd_idx], ' ');
+void create_prompt(char *prompt, const char *current_dir, int last_return_value)
+{
+  if (last_return_value == 0)
+  {
+    snprintf(prompt, MAX_LENGTH_PROMPT, "[%d]%s$ ", last_return_value,
+             current_dir);
+  }
+  else if (last_return_value != 0)
+  {
+    snprintf(prompt, MAX_LENGTH_PROMPT, "[%s%d%s]%s$ ", RED_COLOR,
+             last_return_value, RESET_COLOR, current_dir);
+  }
+}
 
-      // Cases pour le lancement des commandes intégrées
-      if (strcmp(splited[0], "exit") == 0)
+int handle_redirections(char **splited, int *last_return_value)
+{
+  int input_fd = -1, output_fd = -1, append_fd = -1, error_fd = -1;
+  for (int i = 0; splited[i] != NULL; i++)
+  {
+    char *redirection = NULL;
+
+    // Vérifier les redirections avec des descripteurs spécifiques
+    if (strstr(splited[i], ">") != NULL || strstr(splited[i], "<") != NULL)
+    {
+      if (isdigit(splited[i][0]))
       {
-        // Si on a un argument alors c'est la valeur de retour
-        if (splited[1])
-        {
-          last_return_value = atoi(splited[1]);
-        }
-        free(line);
-        free_split(commands);
-        goto fin;
-      }
-      else if (strcmp(splited[0], "pwd") == 0)
-      {
-        last_return_value = pwd();
-      }
-      else if (strcmp(splited[0], "cd") == 0)
-      {
-        last_return_value = execute_cd(splited[1]);
-      }
-      else if (strcmp(splited[0], "ftype") == 0)
-      {
-        last_return_value = ftype(splited[1], ".");
-      }
-      else if (strcmp(splited[0], "for") == 0)
-      {
-        last_return_value = execute_for(splited);
+        redirection = &splited[i][1];
       }
       else
       {
-        // Commande externe
-        pid_t pid = fork();
-        if (pid == 0)
+        redirection = splited[i];
+      }
+    }
+
+    if (redirection != NULL && splited[i + 1] != NULL)
+    {
+      if (strcmp(redirection, "<") == 0)
+      {
+        input_fd = open(splited[i + 1], O_RDONLY);
+        if (input_fd == -1)
         {
-          // Enfant : exécuter la commande
-          execvp(splited[0], splited);
-          fprintf(stderr, "redirect_exec: No such file or directory\n");
-          free(line);
-          free_split(splited);
-          free_split(commands);
-          exit(EXIT_FAILURE);
+          perror("open");
+          *last_return_value = 1;
+          return -1;
         }
-        else if (pid < 0)
+      }
+      else if (strcmp(redirection, ">") == 0)
+      {
+        if (access(splited[i + 1], F_OK) == 0)
         {
-          perror("fork");
-          free(line);
-          free_split(splited);
-          free_split(commands);
-          continue;
+          fprintf(stderr, "pipeline_run: File exists\n");
+          *last_return_value = 1;
+          return -1;
         }
-        else
+        output_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (output_fd == -1)
         {
-          // Parent : attendre l'enfant
-          int status;
-          waitpid(pid, &status, 0);
-          if (WIFEXITED(status))
-          {
-            last_return_value = WEXITSTATUS(status);
-          }
-          else
-          {
-            last_return_value = 1;
-          }
+          perror("open");
+          *last_return_value = 1;
+          return -1;
+        }
+      }
+      else if (strcmp(redirection, ">>") == 0)
+      {
+        append_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (append_fd == -1)
+        {
+          perror("open");
+          *last_return_value = 1;
+          return -1;
+        }
+      }
+      else if (strcmp(redirection, ">|") == 0)
+      {
+        output_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (output_fd == -1)
+        {
+          perror("open");
+          *last_return_value = 1;
+          return -1;
+        }
+      }
+      else if (strcmp(redirection, "2>") == 0)
+      {
+        if (access(splited[i + 1], F_OK) == 0)
+        {
+          fprintf(stderr, "pipeline_run: File exists\n");
+          *last_return_value = 1;
+          return -1;
+        }
+        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (error_fd == -1)
+        {
+          perror("open");
+          *last_return_value = 1;
+          return -1;
+        }
+      }
+      else if (strcmp(redirection, "2>>") == 0)
+      {
+        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (error_fd == -1)
+        {
+          perror("open");
+          *last_return_value = 1;
+          return -1;
+        }
+      }
+      else if (strcmp(redirection, "2>|") == 0)
+      {
+        error_fd = open(splited[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (error_fd == -1)
+        {
+          perror("open");
+          *last_return_value = 1;
+          return -1;
         }
       }
 
-      free_split(splited);
-      splited = NULL;
+      // Supprimer les redirections des arguments
+      for (int j = i; splited[j - 1] != NULL; j++)
+      {
+        splited[j] = splited[j + 2];
+      }
+      i--;
     }
-
-    free(line);
-    line = NULL;
-    free_split(commands);
-    commands = NULL;
   }
 
-// On libère la mémoire et on quitte
-fin:
-  free_split(splited);
+  // Configurer les redirections
+  if (input_fd != -1)
+  {
+    dup2(input_fd, STDIN_FILENO);
+    close(input_fd);
+  }
+  if (output_fd != -1)
+  {
+    dup2(output_fd, STDOUT_FILENO);
+    close(output_fd);
+  }
+  if (append_fd != -1)
+  {
+    dup2(append_fd, STDOUT_FILENO);
+    close(append_fd);
+  }
+  if (error_fd != -1)
+  {
+    dup2(error_fd, STDERR_FILENO);
+    close(error_fd);
+  }
+
+  return 0;
+}
+
+void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr)
+{
+  dup2(saved_stdin, STDIN_FILENO);
+  dup2(saved_stdout, STDOUT_FILENO);
+  dup2(saved_stderr, STDERR_FILENO);
+  close(saved_stdin);
+  close(saved_stdout);
+  close(saved_stderr);
+}
+
+void execute_command(char **splited, int *last_return_value)
+{
+  if (strcmp(splited[0], "exit") == 0)
+  {
+    // Si on a un argument alors c'est la valeur de retour
+    if (splited[1])
+    {
+      *last_return_value = atoi(splited[1]);
+    }
+    cleanup_and_exit(NULL, NULL, splited, *last_return_value);
+  }
+  else if (strcmp(splited[0], "pwd") == 0)
+  {
+    *last_return_value = pwd();
+  }
+  else if (strcmp(splited[0], "cd") == 0)
+  {
+    *last_return_value = execute_cd(splited[1]);
+  }
+  else if (strcmp(splited[0], "ftype") == 0)
+  {
+    *last_return_value = ftype(splited[1], ".");
+  }
+  else if (strcmp(splited[0], "for") == 0)
+  {
+    *last_return_value = execute_for(splited);
+  }
+  else
+  {
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+      execvp(splited[0], splited);
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid < 0)
+    {
+      perror("fork");
+    }
+    else
+    {
+      int status;
+      waitpid(pid, &status, 0);
+      *last_return_value = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    }
+  }
+}
+
+void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value)
+{
+  if (line)
+    free(line);
+  if (commands)
+    free_split(commands);
+  if (splited)
+    free_split(splited);
   exit(last_return_value);
 }
