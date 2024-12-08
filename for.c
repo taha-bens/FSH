@@ -94,6 +94,21 @@ int execute_for(char **args)
     struct dirent *entry;
     int file_count = 0;
     int last_return_value = 0;
+
+    // Sauvegarder une copie des arguments originaux sinon on pourra pas refaire la subsitution après
+    char **original_args = malloc((arg_count + 1) * sizeof(char *));
+    if (original_args == NULL)
+    {
+        perror("malloc");
+        closedir(dir);
+        return 1;
+    }
+    for (int i = 0; i < arg_count; i++)
+    {
+        original_args[i] = strdup(args[i]);
+    }
+    original_args[arg_count] = NULL;
+
     while ((entry = readdir(dir)) != NULL)
     {
         if (!show_all && entry->d_name[0] == '.')
@@ -110,7 +125,7 @@ int execute_for(char **args)
         {
             struct stat entry_stat;
             char full_path[PATH_MAX];
-            snprintf(full_path, sizeof(full_path), "%s/%s", args[3], entry->d_name);
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir_name, entry->d_name);
             if (stat(full_path, &entry_stat) == -1)
             {
                 perror("stat");
@@ -130,46 +145,64 @@ int execute_for(char **args)
         if (max_files != -1 && file_count >= max_files)
             break;
 
-        // Construire le chemin absolu du fichier depuis start_dir
+        // Construire le chemin absolu du fichier on en a besoin pour l'execution
         char file_path[PATH_MAX];
-        snprintf(file_path, sizeof(file_path), "%s/%s", args[3], entry->d_name);
+        snprintf(file_path, sizeof(file_path), "%s/%s", dir_name, entry->d_name);
 
-        // Construire les arguments de la commande
-        int cmd_arg_count = arg_count - 6;
-        Arg *new_args = malloc((cmd_arg_count + 1) * sizeof(Arg));
-        if (new_args == NULL)
+        // Substitution temporaire dans args pour passer l'horrible test
+        for (int i = 5; i < arg_count - 1; i++)
+        {
+            while (1)
+            {
+                char *dollar_pos = strstr(args[i], "$");
+                if (dollar_pos == NULL)
+                    break;
+
+                size_t prefix_len = dollar_pos - args[i];
+                size_t var_len = strlen(var_name);
+                size_t suffix_len = strlen(dollar_pos + 1 + var_len);
+
+                char *expanded = malloc(prefix_len + strlen(file_path) + suffix_len + 1);
+                if (expanded == NULL)
+                {
+                    perror("malloc");
+                    closedir(dir);
+                    return 1;
+                }
+
+                strncpy(expanded, args[i], prefix_len);
+                expanded[prefix_len] = '\0';
+                strcat(expanded, file_path);
+                strcat(expanded, dollar_pos + 1 + var_len);
+
+                free(args[i]);
+                args[i] = expanded;
+            }
+        }
+
+        // Construire les arguments pour exécuter la commande
+        char **exec_args = malloc((arg_count - 5) * sizeof(char *));
+        if (exec_args == NULL)
         {
             perror("malloc");
             closedir(dir);
             return 1;
         }
 
-        int j = 0;
         for (int i = 5; i < arg_count - 1; i++)
         {
-            if (strcmp(args[i], var_name) == 0 || (args[i][0] == '$' && strcmp(args[i] + 1, var_name) == 0))
-            {
-                new_args[j].arg = strdup(file_path); // Allocation dynamique
-                new_args[j].dynamic = 1;
-            }
-            else
-            {
-                new_args[j].arg = args[i];
-                new_args[j].dynamic = 0;
-            }
-            j++;
+            exec_args[i - 5] = args[i];
         }
-        new_args[j].arg = NULL; // Marquer la fin des arguments
-        new_args[j].dynamic = 0;
+        exec_args[arg_count - 6] = NULL;
 
-        // Commande interne
-        if (strcmp(new_args[0].arg, "ftype") == 0)
+        // Commande interne (pr le moment que ftype le reste est pas pertinent)
+        if (strcmp(exec_args[0], "ftype") == 0)
         {
             // Supprimer la partie inutile de new_args[1] puisque on execute ftype à partir de dir_name
-            char *file_name = strrchr(new_args[1].arg, '/');
+            char *file_name = strrchr(exec_args[1], '/');
             if (file_name == NULL)
             {
-                file_name = new_args[1].arg;
+                file_name = exec_args[1];
             }
             else
             {
@@ -177,31 +210,22 @@ int execute_for(char **args)
             }
             if (ftype(file_name, dir_name) != 0)
             {
-                free_args(new_args, j);
+                free(exec_args);
                 closedir(dir);
                 return 1;
             }
-            free_args(new_args, j);
+            free(exec_args);
             continue;
         }
 
-        // Convertir les arguments pour execvp
-        char **exec_args = malloc((j + 1) * sizeof(char *));
-        for (int k = 0; k < j; k++)
-        {
-            exec_args[k] = new_args[k].arg;
-        }
-        exec_args[j] = NULL;
-
-        // Commande externe
+        // Commande externe (on fais un magnifique fork car execvp remplace le processus courant)
         pid_t pid = fork();
         if (pid == 0)
         {
-            // Enfant : exécuter la commande dans le répertoire de départ
+            // Enfant : exécuter la commande dans le répertoire de départ (travail des mineurs)
             if (chdir(start_dir) == -1)
             {
                 perror("chdir");
-                free_args(new_args, j);
                 free(exec_args);
                 closedir(dir);
                 exit(EXIT_FAILURE);
@@ -209,7 +233,6 @@ int execute_for(char **args)
 
             execvp(exec_args[0], exec_args);
             perror("execvp");
-            free_args(new_args, j);
             free(exec_args);
             closedir(dir);
             exit(EXIT_FAILURE);
@@ -217,14 +240,13 @@ int execute_for(char **args)
         else if (pid < 0)
         {
             perror("fork");
-            free_args(new_args, j);
             free(exec_args);
             closedir(dir);
             return 1;
         }
         else
         {
-            // Parent : attendre l'enfant
+            // Parent : attendre l'enfant qui est parti aller acheter des cigarettes
             int status;
             waitpid(pid, &status, 0);
             if (WIFEXITED(status))
@@ -232,7 +254,6 @@ int execute_for(char **args)
                 last_return_value = WEXITSTATUS(status);
                 if (last_return_value != 0)
                 {
-                    free_args(new_args, j);
                     free(exec_args);
                     closedir(dir);
                     return 1;
@@ -240,17 +261,28 @@ int execute_for(char **args)
             }
             else
             {
-                free_args(new_args, j);
                 free(exec_args);
                 closedir(dir);
                 return 1;
             }
         }
 
-        free_args(new_args, j);
-        free(exec_args);
+        // Restaurer args à leur état original pour la prochaine itération...
+        for (int i = 5; i < arg_count - 1; i++)
+        {
+            free(args[i]);
+            args[i] = strdup(original_args[i]);
+        }
+
         file_count++;
     }
+
+    // Libérer les arguments originaux car sinon rip bonzai finito la mémoire
+    for (int i = 0; i < arg_count; i++)
+    {
+        free(original_args[i]);
+    }
+    free(original_args);
 
     closedir(dir);
     return 0;

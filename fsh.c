@@ -26,7 +26,7 @@
 char **str_split(char *a_str, const char a_delim);
 void free_split(char **splited);
 char *trim_and_reduce_spaces(const char *str);
-void create_dir_prompt_name(char *prompt, const char *current_dir);
+void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value);
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
 int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
@@ -51,7 +51,7 @@ int main()
     }
 
     char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
-    create_dir_prompt_name(prompt_dir, current_dir);
+    create_dir_prompt_name(prompt_dir, current_dir, last_return_value);
     create_prompt(formatted_prompt, prompt_dir, last_return_value);
     free(current_dir);
     free(prompt_dir);
@@ -223,11 +223,23 @@ char *trim_and_reduce_spaces(const char *str)
   return new_str;
 }
 
-void create_dir_prompt_name(char *prompt, const char *current_dir)
+void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value)
 {
-  if (strlen(current_dir) > 22)
+  // Technique attroce pour calculer le nombre de chiffres dans un nombre...
+  int number_of_digits = 1;
+  if (last_return_value > 0)
   {
-    snprintf(prompt, MAX_LENGTH_PROMPT, "...%s", current_dir + strlen(current_dir) - 22);
+    int temp = last_return_value;
+    number_of_digits = 0;
+    while (temp > 0)
+    {
+      temp /= 10;
+      number_of_digits++;
+    }
+  }
+  if (strlen(current_dir) > 23 - number_of_digits)
+  {
+    snprintf(prompt, MAX_LENGTH_PROMPT, "...%s", current_dir + strlen(current_dir) - 23 + number_of_digits);
   }
   else
   {
@@ -237,12 +249,12 @@ void create_dir_prompt_name(char *prompt, const char *current_dir)
 
 void create_prompt(char *prompt, const char *current_dir, int last_return_value)
 {
-  if (last_return_value == 0)
+  if (last_return_value != 1)
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "[%d]%s$ ", last_return_value,
              current_dir);
   }
-  else if (last_return_value != 0)
+  else
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "[%s%d%s]%s$ ", RED_COLOR,
              last_return_value, RESET_COLOR, current_dir);
@@ -357,21 +369,50 @@ void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr)
 
 void execute_command(char **splited, int *last_return_value, char ***commands, char **line)
 {
+  int argc = 0;
+  while (splited[argc] != NULL)
+  {
+    argc++;
+  }
   if (strcmp(splited[0], "exit") == 0)
   {
-    // Si on a un argument alors c'est la valeur de retour
+    // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
+    if (argc > 2)
+    {
+      fprintf(stderr, "exit: too many arguments\n");
+      *last_return_value = 1;
+      return;
+    }
+    // Si on a un argument, c'est la valeur de retour
     if (splited[1])
     {
-      *last_return_value = atoi(splited[1]);
+      int code = atoi(splited[1]);
+      if (code > 255)
+      {
+        code %= 256; // Normaliser dans la plage [0, 255]
+      }
+      cleanup_and_exit(*line, *commands, splited, code);
     }
     cleanup_and_exit(*line, *commands, splited, *last_return_value);
   }
   else if (strcmp(splited[0], "pwd") == 0)
   {
+    if (argc != 1)
+    {
+      fprintf(stderr, "exit: too many arguments\n");
+      *last_return_value = 1;
+      return;
+    }
     *last_return_value = pwd();
   }
   else if (strcmp(splited[0], "cd") == 0)
   {
+    if (argc > 2)
+    {
+      fprintf(stderr, "cd: invalid number of arguments\n");
+      *last_return_value = 1;
+      return;
+    }
     *last_return_value = execute_cd(splited[1]);
   }
   else if (strcmp(splited[0], "ftype") == 0)
@@ -399,7 +440,18 @@ void execute_command(char **splited, int *last_return_value, char ***commands, c
     {
       int status;
       waitpid(pid, &status, 0);
-      *last_return_value = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+      if (WIFEXITED(status))
+      {
+        *last_return_value = WEXITSTATUS(status);
+        if (*last_return_value > 255)
+        {
+          *last_return_value %= 256; // Normaliser dans la plage [0, 255]
+        }
+      }
+      else
+      {
+        *last_return_value = 1; // Erreur par défaut
+      }
     }
   }
 }
