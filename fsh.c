@@ -33,6 +33,218 @@ void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void execute_command(char **splited, int *last_return_value, char ***commands, char **line);
 void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value);
 
+typedef enum node_type
+{
+  NODE_COMMAND,  // Une commande simple
+  NODE_PIPELINE, // Un pipeline de commandes
+  NODE_FOR_LOOP,  // Une boucle for avec des commandes
+  NODE_REDIRECTION, // Une redirection de fichier
+  NODE_IF // Une condition if
+} node_type;
+
+typedef struct ast_node
+{
+  node_type type;
+  char *value;                // Valeur principale (par exemple, "for", "ls", "|")
+  struct ast_node **children; // Enfants (par exemple, commandes d'un pipeline ou boucle)
+  int child_count;            // Nombre d'enfants
+} ast_node;
+
+typedef struct ast
+{
+  ast_node *root;
+} ast;
+
+typedef struct command
+{
+  char *name;
+  char **args;
+  int argc;
+} command;
+
+typedef struct pipeline
+{
+  command *commands;
+  int nb_commands;
+} pipeline;
+
+typedef struct redirection
+{
+  char *file;
+  int fd;
+  int mode;
+} redirection;
+
+typedef struct if_statement
+{
+  char *condition;
+  command *then_block;
+  command *else_block;
+} if_statement;
+
+// Crée un nœud d'AST
+ast_node *create_ast_node(node_type type, char *value)
+{
+  ast_node *node = malloc(sizeof(ast_node));
+  node->type = type;
+  node->value = strdup(value);
+  node->children = NULL;
+  node->child_count = 0;
+  return node;
+}
+
+ast *create_ast()
+{
+  ast *tree = malloc(sizeof(ast));
+  tree->root = NULL;
+  return tree;
+}
+
+// Ajoute un enfant à un nœud
+void add_child(ast_node *parent, ast_node *child)
+{
+  parent->children = realloc(parent->children, (parent->child_count + 1) * sizeof(ast_node *));
+  parent->children[parent->child_count++] = child;
+}
+
+// Libère un nœud d'AST
+void free_ast(ast_node *node)
+{
+  for (int i = 0; i < node->child_count; i++)
+  {
+    free_ast(node->children[i]);
+  }
+  free(node->children);
+  free(node->value);
+  free(node);
+}
+
+void free_ast(ast *tree)
+{
+  if (tree->root)
+  {
+    free_ast_node(tree->root);
+  }
+  free(tree);
+}
+
+command *create_command(char *name, char **args, int argc)
+{
+  command *cmd = malloc(sizeof(command));
+  cmd->name = name;
+  cmd->args = args;
+  cmd->argc = argc;
+  return cmd;
+}
+
+void free_command(command *cmd)
+{
+  free(cmd->name);
+  for (int i = 0; i < cmd->argc; i++)
+  {
+    free(cmd->args[i]);
+  }
+  free(cmd->args);
+  free(cmd);
+}
+
+pipeline *create_pipeline(command *commands, int nb_commands)
+{
+  pipeline *pipe = malloc(sizeof(pipeline));
+  pipe->commands = commands;
+  pipe->nb_commands = nb_commands;
+  return pipe;
+}
+
+void free_pipeline(pipeline *pipe)
+{
+  for (int i = 0; i < pipe->nb_commands; i++)
+  {
+    free_command(&pipe->commands[i]);
+  }
+  free(pipe->commands);
+  free(pipe);
+}
+
+redirection *create_redirection(char *file, int fd, int mode)
+{
+  redirection *red = malloc(sizeof(redirection));
+  red->file = file;
+  red->fd = fd;
+  red->mode = mode;
+  return red;
+}
+
+void free_redirection(redirection *red)
+{
+  free(red->file);
+  free(red);
+}
+
+// Fonction principale pour construire l'AST
+ast_node *construct_ast(char *line)
+{
+  char *token = strtok(line, " ");
+  ast_node *root = NULL;
+  ast_node *current = NULL;
+
+  while (token)
+  {
+    if (strcmp(token, "for") == 0)
+    {
+      // Gestion de la boucle "for"
+      ast_node *for_node = create_ast_node(NODE_FOR_LOOP, "for");
+      token = strtok(NULL, " "); // Variable
+      add_child(for_node, create_ast_node(NODE_COMMAND, token));
+      token = strtok(NULL, " "); // "in"
+      token = strtok(NULL, " "); // Liste
+      add_child(for_node, create_ast_node(NODE_COMMAND, token));
+      token = strtok(NULL, " "); // "{"
+      while (token && strcmp(token, "}") != 0)
+      {
+        add_child(for_node, create_ast_node(NODE_COMMAND, token));
+        token = strtok(NULL, " ");
+      }
+      if (!root)
+        root = for_node;
+      else
+        add_child(current, for_node);
+      current = for_node;
+    }
+    else if (strcmp(token, "|") == 0)
+    {
+      // Gestion du pipeline
+      ast_node *pipeline_node = create_ast_node(NODE_PIPELINE, "|");
+      if (current)
+        add_child(pipeline_node, current);
+      current = pipeline_node;
+    }
+    else if (strcmp(token, ">") == 0 || strcmp(token, ">>") == 0 || strcmp(token, "<") == 0 || strcmp(token, "2>") || strcmp(token, ">|") == 0 || strcmp(token, "2>>") == 0 || strcmp(token, "2>|") == 0)
+    {
+      // Gestion des redirections
+      ast_node *redir_node = create_ast_node(NODE_COMMAND, token);
+      token = strtok(NULL, " ");
+      add_child(redir_node, create_ast_node(NODE_COMMAND, token));
+      if (!current)
+        current = redir_node;
+      else
+        add_child(current, redir_node);
+    }
+    else
+    {
+      // Commande ou argument
+      ast_node *cmd_node = create_ast_node(NODE_COMMAND, token);
+      if (!root)
+        root = cmd_node;
+      else if (current)
+        add_child(current, cmd_node);
+      current = cmd_node;
+    }
+    token = strtok(NULL, " ");
+  }
+
+  return root;
+}
 int main()
 {
   int last_return_value = 0;
