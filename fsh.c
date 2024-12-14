@@ -122,7 +122,7 @@ ast_node *create_command_node(char *name, char **args, int argc)
   {
     node->data.cmd.args[i] = strdup(args[i]);
   }
-  node->data.cmd.args[argc] = NULL; 
+  node->data.cmd.args[argc] = NULL;
   node->data.cmd.argc = argc;
 
   return node;
@@ -329,7 +329,7 @@ ast_node *construct_ast(char *line)
   return root;
 }
 
-void execute_ast(ast_node *node, int *last_return_value)
+void execute_ast(ast_node *node, int *last_return_value, char** variables)
 {
   if (node == NULL)
   {
@@ -338,7 +338,88 @@ void execute_ast(ast_node *node, int *last_return_value)
 
   for (int i = 0; i < node->child_count; i++)
   {
-    execute_ast(node->children[i], last_return_value);
+    execute_ast(node->children[i], last_return_value, variables);
+  }
+
+  if (node->type == NODE_FOR_LOOP)
+  {
+    // Exécuter la boucle for
+    for_loop *loop = &node->data.for_loop;
+    DIR *dir = opendir(loop->dir);
+    if (dir == NULL)
+    {
+      perror("opendir");
+      *last_return_value = 1;
+      return;
+    }
+
+    struct dirent *entry;
+    int file_count = 0;
+
+    char **original_args = malloc((loop->block->child_count + 1) * sizeof(char *));
+    if (original_args == NULL)
+    {
+      perror("malloc");
+      closedir(dir);
+      *last_return_value = 1;
+      return;
+    }
+    for (int i = 0; i < loop->block->child_count; i++)
+    {
+      original_args[i] = strdup(loop->block->children[i]->data.cmd.name);
+    }
+    original_args[loop->block->child_count] = NULL;
+
+    while ((entry = readdir(dir)) != NULL)
+    {
+      if (entry->d_name[0] == '.')
+        continue;
+
+      char *file_path = malloc(strlen(loop->dir) + strlen(entry->d_name) + 2);
+      if (file_path == NULL)
+      {
+        perror("malloc");
+        closedir(dir);
+        *last_return_value = 1;
+        return;
+      }
+      sprintf(file_path, "%s/%s", loop->dir, entry->d_name);
+
+      for (int i = 0; i < loop->block->child_count; i++)
+      {
+        char *expanded = malloc(strlen(original_args[i]) + strlen(file_path) + 1);
+        if (expanded == NULL)
+        {
+          perror("malloc");
+          closedir(dir);
+          *last_return_value = 1;
+          return;
+        }
+        sprintf(expanded, "%s %s", original_args[i], file_path);
+        free(loop->block->children[i]->data.cmd.name);
+        loop->block->children[i]->data.cmd.name = expanded;
+      }
+
+      execute_ast(loop->block, last_return_value, variables);
+      if (last_return_value != 0)
+      {
+        break;
+      }
+
+      file_count++;
+    }
+
+    for (int i = 0; i < loop->block->child_count; i++)
+    {
+      free(loop->block->children[i]->data.cmd.name);
+      loop->block->children[i]->data.cmd.name = strdup(original_args[i]);
+    }
+
+    for (int i = 0; i < loop->block->child_count; i++)
+    {
+      free(original_args[i]);
+    }
+    closedir(dir);
   }
 
   if (node->type == NODE_COMMAND)
@@ -389,10 +470,6 @@ void execute_ast(ast_node *node, int *last_return_value)
     else if (strcmp(cmd->name, "ftype") == 0)
     {
       *last_return_value = ftype(cmd->args[0], ".");
-    }
-    else if (strcmp(cmd->name, "for") == 0)
-    {
-      *last_return_value = execute_for(cmd->args);
     }
     else
     {
@@ -471,8 +548,15 @@ int main()
     ast_node *root = construct_ast(cleaned_line);
     free(cleaned_line);
 
+    char** variables = NULL;
+
     // Execute the AST
-    execute_ast(root, &last_return_value);
+    execute_ast(root, &last_return_value, variables);
+
+    if(variables != NULL)
+    {
+      free(variables);
+    }
 
     // Free the AST
     free_ast_node(root);
