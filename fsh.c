@@ -270,7 +270,7 @@ void free_redirection(redirection *red)
 }
 
 // Fonction récursive pour construire l'AST
-ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
+ast_node *construct_ast_recursive(char **tokens, int *index)
 {
   ast_node *node = NULL;
 
@@ -282,8 +282,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
       // On a fini le bloc for il faut quitter la récursion
       break;
     }
-    else
-    if (strcmp(tokens[*index], ";") == 0)
+    else if (strcmp(tokens[*index], ";") == 0)
     {
       (*index)++;
       break;
@@ -353,8 +352,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
         return NULL;
       }
       (*index)++;
-      variables = realloc(variables, (strlen(variable) + 1) * sizeof(char *));
-      ast_node *block = construct_ast_recursive(tokens, index, variables);
+      ast_node *block = construct_ast_recursive(tokens, index);
       // Vérifier que la fin du bloc est bien une accolade fermante
       (*index)--;
       if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
@@ -367,26 +365,50 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
     else if (strcmp(tokens[*index], "if") == 0)
     {
       char *condition = tokens[(*index)++];
-      ast_node *then_block = construct_ast_recursive(tokens, index, variables);
+      ast_node *then_block = construct_ast_recursive(tokens, index);
       ast_node *else_block = NULL;
       if (tokens[*index] && strcmp(tokens[*index], "else") == 0)
       {
         (*index)++;
-        else_block = construct_ast_recursive(tokens, index, variables);
+        else_block = construct_ast_recursive(tokens, index);
       }
       node = create_if_node(condition, then_block, else_block);
     }
     else
     {
       char *name = tokens[(*index)++];
-      char **args = &tokens[*index];
       int argc = 0;
+
+      // Compter les arguments
+      int start_index = *index;
+      printf("Start index : %d\n", start_index);
       while (tokens[*index] && strcmp(tokens[*index], ";") != 0)
       {
         (*index)++;
         argc++;
       }
+
+      // Copier les arguments
+      char **args = malloc(argc * sizeof(char *));
+      for (int i = 0; i < argc; i++)
+      {
+        args[i] = strdup(tokens[start_index + i]);
+      }
+
+      // Créer le nœud
       node = create_command_node(name, args, argc);
+      printf("Commande %s\n", name);
+      printf("Arguments : ");
+      for (int i = 0; i < argc; i++)
+      {
+        printf("%s ", args[i]);
+      }
+
+      // Passer le point-virgule
+      if (tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      {
+        (*index)++;
+      }
     }
   }
 
@@ -394,17 +416,16 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
 }
 
 // Fonction principale pour construire l'AST
-ast_node *construct_ast(char *line, char **variables)
+ast_node *construct_ast(char *line)
 {
   char **tokens = str_split(line, ' ');
   int index = 0;
   // Trouver tous les ; qui sont en dehors des blocs
   ast_node *root = create_ast_node(NODE_SEQUENCE, ";");
 
-
   while (tokens[index] != NULL)
   {
-    ast_node *child = construct_ast_recursive(tokens, &index, variables);
+    ast_node *child = construct_ast_recursive(tokens, &index);
     if (child != NULL)
     {
       add_child(root, child);
@@ -421,7 +442,7 @@ ast_node *construct_ast(char *line, char **variables)
   return root;
 }
 
-void execute_ast(ast_node *node, int *last_return_value, char** variables)
+void execute_ast(ast_node *node, int *last_return_value)
 {
   if (node == NULL)
   {
@@ -430,18 +451,18 @@ void execute_ast(ast_node *node, int *last_return_value, char** variables)
 
   for (int i = 0; i < node->child_count; i++)
   {
-    execute_ast(node->children[i], last_return_value, variables);
+    execute_ast(node->children[i], last_return_value);
   }
 
   if (node->type == NODE_FOR_LOOP)
-{
+  {
     for_loop *loop = &node->data.for_loop;
     DIR *dir = opendir(loop->dir);
     if (dir == NULL)
     {
-        perror("opendir");
-        *last_return_value = 1;
-        return;
+      perror("opendir");
+      *last_return_value = 1;
+      return;
     }
 
     struct dirent *entry;
@@ -450,53 +471,53 @@ void execute_ast(ast_node *node, int *last_return_value, char** variables)
     // Parcourir les fichiers du répertoire
     while ((entry = readdir(dir)) != NULL)
     {
-        // Ignorer les fichiers cachés si show_all n'est pas activé
-        if (entry->d_name[0] == '.' && !loop->show_all)
-            continue;
+      // Ignorer les fichiers cachés si show_all n'est pas activé
+      if (entry->d_name[0] == '.' && !loop->show_all)
+        continue;
 
-        // Créer le chemin complet du fichier
-        char file_path[PATH_MAX];
-        snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+      // Créer le chemin complet du fichier
+      char file_path[PATH_MAX];
+      snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
 
-        // Vérification des options (extension, type, etc.)
-        struct stat file_stat;
-        if (stat(file_path, &file_stat) == -1)
-        {
-            perror("stat");
-            continue;
-        }
+      // Vérification des options (extension, type, etc.)
+      struct stat file_stat;
+      if (stat(file_path, &file_stat) == -1)
+      {
+        perror("stat");
+        continue;
+      }
 
-        // Filtrer les fichiers par extension
-        if (loop->ext && !strstr(entry->d_name, loop->ext))
-            continue;
+      // Filtrer les fichiers par extension
+      if (loop->ext && !strstr(entry->d_name, loop->ext))
+        continue;
 
-        // Filtrer les fichiers par type
-        if (loop->type)
-        {
-            if ((strcmp(loop->type, "file") == 0 && !S_ISREG(file_stat.st_mode)) ||
-                (strcmp(loop->type, "dir") == 0 && !S_ISDIR(file_stat.st_mode)))
-                continue;
-        }
+      // Filtrer les fichiers par type
+      if (loop->type)
+      {
+        if ((strcmp(loop->type, "file") == 0 && !S_ISREG(file_stat.st_mode)) ||
+            (strcmp(loop->type, "dir") == 0 && !S_ISDIR(file_stat.st_mode)))
+          continue;
+      }
 
-        // Limiter le nombre de fichiers si max_files est défini
-        if (loop->max_files > 0 && file_count >= loop->max_files)
-            break;
+      // Limiter le nombre de fichiers si max_files est défini
+      if (loop->max_files > 0 && file_count >= loop->max_files)
+        break;
 
-        // Ajouter une variable d'environnement temporaire pour la variable du `for`
-        setenv(loop->variable, file_path, 1);
+      // Ajouter une variable d'environnement temporaire pour la variable du `for`
+      setenv(loop->variable, file_path, 1);
 
-        // Exécuter le bloc de commandes avec la variable remplacée
-        execute_ast(loop->block, last_return_value, variables);
+      // Exécuter le bloc de commandes avec la variable remplacée
+      execute_ast(loop->block, last_return_value);
 
-        // Compteur de fichiers traités
-        file_count++;
+      // Compteur de fichiers traités
+      file_count++;
     }
 
     closedir(dir);
 
     // Supprimer la variable temporaire après l'exécution
     unsetenv(loop->variable);
-}
+  }
 
   if (node->type == NODE_COMMAND)
   {
@@ -552,6 +573,12 @@ void execute_ast(ast_node *node, int *last_return_value, char** variables)
       pid_t pid = fork();
       if (pid == 0)
       {
+        printf("Executing %s\n", cmd->name);
+        printf("Arguments : ");
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          printf("%s ", cmd->args[i]);
+        }
         execvp(cmd->name, cmd->args);
         perror("execvp");
         exit(EXIT_FAILURE);
@@ -623,17 +650,9 @@ int main()
     }
 
     add_history(line);
-    // Faire l'allocation des variables on considèrera que les variables sont max de longueur 1
-    char **variables = malloc(1 * sizeof(char *));
-    if (variables == NULL)
-    {
-      perror("malloc");
-      return 1;
-    }
-    variables[0] = NULL;
 
     // Parser la ligne de commande
-    ast_node *root = construct_ast(cleaned_line, variables);
+    ast_node *root = construct_ast(cleaned_line);
     free(cleaned_line);
     if (root == NULL)
     {
@@ -643,15 +662,10 @@ int main()
     }
 
     // Exécuter l'AST
-    execute_ast(root, &last_return_value, variables);
+    execute_ast(root, &last_return_value);
 
     // Restaurer les descripteurs de fichiers standard
     restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
-
-    if(variables != NULL)
-    {
-      free(variables);
-    }
 
     // Libérer la mémoire
     free_ast_node(root);
