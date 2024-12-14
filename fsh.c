@@ -381,16 +381,15 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       (*index)++;
       ast_node *block = construct_ast_recursive(tokens, index);
       (*index)--;
-      int multiple_commands = 0;
       // Si il y a un point virgule c'est qu'il y a une autre commande après le bloc et on continue la récursion
       while (tokens[*index] && strcmp(tokens[*index], ";") == 0)
       {
-        multiple_commands = 1;
         (*index)++;
         ast_node *child = construct_ast_recursive(tokens, index);
         if (child != NULL)
         {
           add_child(block, child);
+          (*index)--;
         }
         else
         {
@@ -400,12 +399,9 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         }
       }
 
-      if (multiple_commands)
-      {
-        (*index)--;
-      }
       if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
       {
+        fprintf(stderr, "No closing bracket\n");
         fprintf(stderr, "for: Invalid syntax\n");
         free_ast_node(block);
         free(variable);
