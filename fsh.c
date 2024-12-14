@@ -24,6 +24,8 @@
 #define SIZE_PWDBUF 1024
 #define PATH_MAX 4096
 
+typedef struct ast_node ast_node;
+
 char **str_split(char *a_str, const char a_delim);
 void free_split(char **splited);
 char *trim_and_reduce_spaces(const char *str);
@@ -31,9 +33,7 @@ void create_dir_prompt_name(char *prompt, const char *current_dir, int last_retu
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
 int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
-void execute_command(char **splited, int *last_return_value, char ***commands, char **line);
-void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value);
-typedef struct ast_node ast_node;
+void cleanup_and_exit(int last_return_value, ast_node *tree);
 
 typedef enum node_type
 {
@@ -68,8 +68,8 @@ typedef struct redirection
 typedef struct if_statement
 {
   char *condition;
-  command *then_block;
-  command *else_block;
+  ast_node *then_block;
+  ast_node *else_block;
 } if_statement;
 
 typedef struct for_loop
@@ -101,11 +101,6 @@ typedef struct ast_node
   } data;
 } ast_node;
 
-typedef struct ast
-{
-  ast_node *root;
-} ast;
-
 // Crée un nœud d'AST
 ast_node *create_ast_node(node_type type, char *value)
 {
@@ -121,19 +116,15 @@ ast_node *create_command_node(char *name, char **args, int argc)
 {
   ast_node *node = create_ast_node(NODE_COMMAND, name);
   node->data.cmd.name = strdup(name);
-  // Les options sont marquées par un tiret
-  int i = 1;
-  while (i < argc && args[i][0] == '-')
-  {
-    i++;
-  }
-  node->data.cmd.args = malloc(argc * sizeof(char *));
-  while (i < argc && not_in_brackets(args[i], strlen(args[i])))
+  node->data.cmd.args = malloc((argc + 1) * sizeof(char *)); // NULL terminaison
+
+  for (int i = 0; i < argc; i++)
   {
     node->data.cmd.args[i] = strdup(args[i]);
-
   }
+  node->data.cmd.args[argc] = NULL; 
   node->data.cmd.argc = argc;
+
   return node;
 }
 
@@ -149,7 +140,7 @@ ast_node *create_pipeline_node(command **commands, int nb_commands)
   return node;
 }
 
-ast_node *create_if_node(char *condition, command *then_block, command *else_block)
+ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block)
 {
   ast_node *node = create_ast_node(NODE_IF, condition);
   node->data.if_stmt.condition = strdup(condition);
@@ -157,7 +148,6 @@ ast_node *create_if_node(char *condition, command *then_block, command *else_blo
   node->data.if_stmt.else_block = else_block;
   return node;
 }
-
 ast_node *create_for_node(char *dir, char *variable, ast_node *block)
 {
   ast_node *node = create_ast_node(NODE_FOR_LOOP, "for");
@@ -174,13 +164,6 @@ ast_node *create_redirection_node(char *file, int fd, int mode)
   node->data.redir.fd = fd;
   node->data.redir.mode = mode;
   return node;
-}
-
-ast *create_ast()
-{
-  ast *tree = malloc(sizeof(ast));
-  tree->root = NULL;
-  return tree;
 }
 
 // Ajoute un enfant à un nœud
@@ -234,31 +217,13 @@ void free_ast_node(ast_node *node)
     break;
   case NODE_IF:
     free(node->data.if_stmt.condition);
-    free_command(node->data.if_stmt.then_block);
-    free_command(node->data.if_stmt.else_block);
+    free_ast_node(node->data.if_stmt.then_block);
+    free_ast_node(node->data.if_stmt.else_block);
     break;
   default:
     break;
   }
   free(node);
-}
-
-void free_ast(ast *tree)
-{
-  if (tree->root)
-  {
-    free_ast_node(tree->root);
-  }
-  free(tree);
-}
-
-command *create_command(char *name, char **args, int argc)
-{
-  command *cmd = malloc(sizeof(command));
-  cmd->name = name;
-  cmd->args = args;
-  cmd->argc = argc;
-  return cmd;
 }
 
 pipeline *create_pipeline(command **commands, int nb_commands)
@@ -294,13 +259,73 @@ void free_redirection(redirection *red)
   free(red);
 }
 
+// Fonction récursive pour construire l'AST
+ast_node *construct_ast_recursive(char **tokens, int *index)
+{
+  ast_node *node = NULL;
+
+  while (tokens[*index] != NULL)
+  {
+    if (strcmp(tokens[*index], ";") == 0)
+    {
+      (*index)++;
+      break;
+    }
+    else if (strcmp(tokens[*index], "for") == 0)
+    {
+      (*index)++;
+      char *dir = tokens[(*index)++];
+      char *variable = tokens[(*index)++];
+      ast_node *block = construct_ast_recursive(tokens, index);
+      node = create_for_node(dir, variable, block);
+    }
+    else if (strcmp(tokens[*index], "if") == 0)
+    {
+      (*index)++;
+      char *condition = tokens[(*index)++];
+      ast_node *then_block = construct_ast_recursive(tokens, index);
+      ast_node *else_block = NULL;
+      if (tokens[*index] && strcmp(tokens[*index], "else") == 0)
+      {
+        (*index)++;
+        else_block = construct_ast_recursive(tokens, index);
+      }
+      node = create_if_node(condition, then_block, else_block);
+    }
+    else
+    {
+      char *name = tokens[(*index)++];
+      char **args = &tokens[*index];
+      int argc = 0;
+      while (tokens[*index] && strcmp(tokens[*index], ";") != 0)
+      {
+        (*index)++;
+        argc++;
+      }
+      node = create_command_node(name, args, argc);
+    }
+  }
+
+  return node;
+}
+
 // Fonction principale pour construire l'AST
 ast_node *construct_ast(char *line)
 {
-  char **commands = str_split(line, ' ');
-  int i = 0;
+  char **tokens = str_split(line, ' ');
+  int index = 0;
   ast_node *root = create_ast_node(NODE_SEQUENCE, ";");
-  free_split(commands);
+
+  while (tokens[index] != NULL)
+  {
+    ast_node *child = construct_ast_recursive(tokens, &index);
+    if (child)
+    {
+      add_child(root, child);
+    }
+  }
+
+  free_split(tokens);
   return root;
 }
 
@@ -320,127 +345,86 @@ void execute_ast(ast_node *node, int *last_return_value)
   {
     // Exécuter la commande
     command *cmd = &node->data.cmd;
-    pid_t pid = fork();
-    if (pid == 0)
+    if (strcmp(cmd->name, "exit") == 0)
     {
-      execvp(cmd->name, cmd->args);
-      perror("execvp");
-      exit(EXIT_FAILURE);
+      // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
+      if (cmd->argc > 1)
+      {
+        fprintf(stderr, "exit: too many arguments\n");
+        *last_return_value = 1;
+        return;
+      }
+      // Si on a un argument, c'est la valeur de retour
+      if (cmd->argc == 1)
+      {
+        int code = atoi(cmd->args[0]);
+        if (code > 255)
+        {
+          code %= 256; // Normaliser dans la plage [0, 255]
+        }
+        cleanup_and_exit(code, node);
+      }
+      cleanup_and_exit(*last_return_value, node);
     }
-    else if (pid < 0)
+    else if (strcmp(cmd->name, "pwd") == 0)
     {
-      perror("fork");
+      if (cmd->argc != 0)
+      {
+        fprintf(stderr, "pwd: too many arguments\n");
+        *last_return_value = 1;
+        return;
+      }
+      *last_return_value = pwd();
+    }
+    else if (strcmp(cmd->name, "cd") == 0)
+    {
+      if (cmd->argc > 1)
+      {
+        fprintf(stderr, "cd: invalid number of arguments\n");
+        *last_return_value = 1;
+        return;
+      }
+      *last_return_value = execute_cd(cmd->args[0]);
+    }
+    else if (strcmp(cmd->name, "ftype") == 0)
+    {
+      *last_return_value = ftype(cmd->args[0], ".");
+    }
+    else if (strcmp(cmd->name, "for") == 0)
+    {
+      *last_return_value = execute_for(cmd->args);
     }
     else
     {
-      int status;
-      waitpid(pid, &status, 0);
-      if (WIFEXITED(status))
+      pid_t pid = fork();
+      if (pid == 0)
       {
-        *last_return_value = WEXITSTATUS(status);
+        execvp(cmd->name, cmd->args);
+        perror("execvp");
+        exit(EXIT_FAILURE);
+      }
+      else if (pid < 0)
+      {
+        perror("fork");
       }
       else
       {
-        *last_return_value = 1; // Erreur par défaut
+        int status;
+        waitpid(pid, &status, 0);
+        if (WIFEXITED(status))
+        {
+          *last_return_value = WEXITSTATUS(status);
+          if (*last_return_value > 255)
+          {
+            *last_return_value %= 256; // Normaliser dans la plage [0, 255]
+          }
+        }
+        else
+        {
+          *last_return_value = 1; // Erreur par défaut
+        }
       }
     }
-  }
-  else if (node->type == NODE_PIPELINE)
-  {
-    // Exécuter le pipeline
-    pipeline *pipeline_data = &node->data.pipe;
-    int pipefd[2];
-    pid_t pid1, pid2;
-
-    if (pipe(pipefd) == -1)
-    {
-      perror("pipe");
-      return;
-    }
-
-    pid1 = fork();
-    if (pid1 == 0)
-    {
-      // Enfant 1
-      dup2(pipefd[1], STDOUT_FILENO);
-      close(pipefd[0]);
-      close(pipefd[1]);
-      execvp(pipeline_data->commands[0]->name, pipeline_data->commands[0]->args);
-      perror("execvp");
-      exit(EXIT_FAILURE);
-    }
-    else if (pid1 < 0)
-    {
-      perror("fork");
-      return;
-    }
-
-    pid2 = fork();
-    if (pid2 == 0)
-    {
-      // Enfant 2
-      dup2(pipefd[0], STDIN_FILENO);
-      close(pipefd[0]);
-      close(pipefd[1]);
-      execvp(pipeline_data->commands[1]->name, pipeline_data->commands[1]->args);
-      perror("execvp");
-      exit(EXIT_FAILURE);
-    }
-    else if (pid2 < 0)
-    {
-      perror("fork");
-      return;
-    }
-
-    close(pipefd[0]);
-    close(pipefd[1]);
-
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0);
-  }
-  else if (node->type == NODE_REDIRECTION)
-  {
-    // Exécuter la redirection
-    redirection *redir = &node->data.redir;
-    int saved_fd = dup(redir->fd);
-    int file_fd = open(redir->file, redir->mode, 0644);
-    if (file_fd == -1)
-    {
-      perror("open");
-      return;
-    }
-    dup2(file_fd, redir->fd);
-    close(file_fd);
-
-    execute_ast(node->children[0], last_return_value);
-
-    dup2(saved_fd, redir->fd);
-    close(saved_fd);
-  }
-  else if (node->type == NODE_FOR_LOOP)
-  {
-    // Exécuter la boucle for
-    for_loop *loop = &node->data.for_loop;
-    DIR *dir = opendir(loop->dir);
-    if (dir == NULL)
-    {
-      perror("opendir");
-      return;
-    }
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL)
-    {
-      if (entry->d_name[0] == '.')
-        continue;
-
-      char *var_value = entry->d_name;
-      setenv(loop->variable, var_value, 1);
-
-      execute_ast(node->children[0], last_return_value);
-    }
-
-    closedir(dir);
   }
 }
 
@@ -760,102 +744,8 @@ void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr)
   close(saved_stderr);
 }
 
-void execute_command(char **splited, int *last_return_value, char ***commands, char **line)
+void cleanup_and_exit(int last_return_value, ast_node *tree)
 {
-  int argc = 0;
-  while (splited[argc] != NULL)
-  {
-    argc++;
-  }
-  if (strcmp(splited[0], "exit") == 0)
-  {
-    // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
-    if (argc > 2)
-    {
-      fprintf(stderr, "exit: too many arguments\n");
-      *last_return_value = 1;
-      return;
-    }
-    // Si on a un argument, c'est la valeur de retour
-    if (splited[1])
-    {
-      int code = atoi(splited[1]);
-      if (code > 255)
-      {
-        code %= 256; // Normaliser dans la plage [0, 255]
-      }
-      cleanup_and_exit(*line, *commands, splited, code);
-    }
-    cleanup_and_exit(*line, *commands, splited, *last_return_value);
-  }
-  else if (strcmp(splited[0], "pwd") == 0)
-  {
-    if (argc != 1)
-    {
-      fprintf(stderr, "exit: too many arguments\n");
-      *last_return_value = 1;
-      return;
-    }
-    *last_return_value = pwd();
-  }
-  else if (strcmp(splited[0], "cd") == 0)
-  {
-    if (argc > 2)
-    {
-      fprintf(stderr, "cd: invalid number of arguments\n");
-      *last_return_value = 1;
-      return;
-    }
-    *last_return_value = execute_cd(splited[1]);
-  }
-  else if (strcmp(splited[0], "ftype") == 0)
-  {
-    *last_return_value = ftype(splited[1], ".");
-  }
-  else if (strcmp(splited[0], "for") == 0)
-  {
-    *last_return_value = execute_for(splited);
-  }
-  else
-  {
-    pid_t pid = fork();
-    if (pid == 0)
-    {
-      execvp(splited[0], splited);
-      perror("execvp");
-      exit(EXIT_FAILURE);
-    }
-    else if (pid < 0)
-    {
-      perror("fork");
-    }
-    else
-    {
-      int status;
-      waitpid(pid, &status, 0);
-      if (WIFEXITED(status))
-      {
-        *last_return_value = WEXITSTATUS(status);
-        if (*last_return_value > 255)
-        {
-          *last_return_value %= 256; // Normaliser dans la plage [0, 255]
-        }
-      }
-      else
-      {
-        *last_return_value = 1; // Erreur par défaut
-      }
-    }
-  }
-}
-
-void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value)
-{
-  if (line)
-    free(line);
-  if (commands)
-    free_split(commands);
-  if (splited)
-    free_split(splited);
+  free_ast_node(tree);
   exit(last_return_value);
 }
