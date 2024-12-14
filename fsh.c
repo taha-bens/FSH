@@ -319,11 +319,8 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         return NULL;
       }
       // Aller chercher le nom de la variable et le répertoire qui suit
-      // Ajouter $ devant le nom de la variable
       char *variable = malloc(strlen(tokens[*index + 1]) + 2);
-      variable[0] = '$';
-      strcpy(variable + 1, tokens[*index + 1]);
-      variable[strlen(tokens[*index + 1]) + 1] = '\0';
+      strcpy(variable, tokens[*index + 1]);
       (*index)++;
       (*index)++; // On saute le in
       char *dir = tokens[(*index + 1)];
@@ -384,9 +381,11 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       (*index)++;
       ast_node *block = construct_ast_recursive(tokens, index);
       (*index)--;
+      int multiple_commands = 0;
       // Si il y a un point virgule c'est qu'il y a une autre commande après le bloc et on continue la récursion
       while (tokens[*index] && strcmp(tokens[*index], ";") == 0)
       {
+        multiple_commands = 1;
         (*index)++;
         ast_node *child = construct_ast_recursive(tokens, index);
         if (child != NULL)
@@ -401,12 +400,12 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         }
       }
 
-      (*index)--;
-      // Vérifier que la fin du bloc est bien une accolade fermante
-      fprintf(stderr, "tokens[*index] = %s\n", tokens[*index]);
+      if (multiple_commands)
+      {
+        (*index)--;
+      }
       if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
       {
-        fprintf(stderr, "nike ta mere\n");
         fprintf(stderr, "for: Invalid syntax\n");
         free_ast_node(block);
         free(variable);
@@ -430,7 +429,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
     else
     {
       int argc = 0;
- 
+
       // Compter les arguments
       int start_index = *index;
       // SAINTE MERE DE DIEU C'EST HORRIBLE
@@ -561,16 +560,37 @@ void execute_ast(ast_node *node, int *last_return_value)
       file_count++;
     }
 
-    closedir(dir);
-
-    // Supprimer la variable temporaire après l'exécution
+    // Supprimer la variable d'environnement temporaire
     unsetenv(loop->variable);
+    closedir(dir);
   }
 
   if (node->type == NODE_COMMAND)
   {
     // Exécuter la commande
     command *cmd = &node->data.cmd;
+
+    // Faire une copie des arguments pour pouvoir les modifier
+    char **copy_args = malloc((cmd->argc + 1) * sizeof(char *));
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      copy_args[i] = strdup(cmd->args[i]);
+    }
+    copy_args[cmd->argc] = NULL;
+
+    // Regarder dans args si on a pas une substitution de variable à faire
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      if (cmd->args[i][0] == '$')
+      {
+        char *var = getenv(cmd->args[i] + 1);
+        if (var != NULL)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(var);
+        }
+      }
+    }
     if (strcmp(cmd->args[0], "exit") == 0)
     {
       // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
@@ -578,6 +598,17 @@ void execute_ast(ast_node *node, int *last_return_value)
       {
         fprintf(stderr, "exit: too many arguments\n");
         *last_return_value = 1;
+        // Retablir les arguments originaux
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
         return;
       }
       // Si on a un argument, c'est la valeur de retour
@@ -588,8 +619,28 @@ void execute_ast(ast_node *node, int *last_return_value)
         {
           code %= 256; // Normaliser dans la plage [0, 255]
         }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
         cleanup_and_exit(code, node);
       }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
       cleanup_and_exit(*last_return_value, node);
     }
     else if (strcmp(cmd->args[0], "pwd") == 0)
@@ -598,9 +649,29 @@ void execute_ast(ast_node *node, int *last_return_value)
       {
         fprintf(stderr, "pwd: too many arguments\n");
         *last_return_value = 1;
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
         return;
       }
       *last_return_value = pwd();
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
     }
     else if (strcmp(cmd->args[0], "cd") == 0)
     {
@@ -608,13 +679,43 @@ void execute_ast(ast_node *node, int *last_return_value)
       {
         fprintf(stderr, "cd: invalid number of arguments\n");
         *last_return_value = 1;
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
         return;
       }
       *last_return_value = execute_cd(cmd->args[1]);
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
     }
     else if (strcmp(cmd->args[0], "ftype") == 0)
     {
       *last_return_value = ftype(cmd->args[1], ".");
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
     }
     else
     {
@@ -640,6 +741,16 @@ void execute_ast(ast_node *node, int *last_return_value)
         if (WIFEXITED(status))
         {
           *last_return_value = WEXITSTATUS(status);
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(cmd->args[i]);
+            cmd->args[i] = strdup(copy_args[i]);
+          }
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(copy_args[i]);
+          }
+          free(copy_args);
           if (*last_return_value > 255)
           {
             *last_return_value %= 256; // Normaliser dans la plage [0, 255]
