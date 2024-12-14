@@ -147,6 +147,13 @@ ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_b
   return node;
 }
 
+// Ajoute un enfant à un nœud
+void add_child(ast_node *parent, ast_node *child)
+{
+  parent->children = realloc(parent->children, (parent->child_count + 1) * sizeof(ast_node *));
+  parent->children[parent->child_count++] = child;
+}
+
 ast_node *create_for_node(char *dir, char *variable, char **options, int show_all, int recursive, char *ext, char *type, int max_files, ast_node *block)
 {
   ast_node *node = create_ast_node(NODE_FOR_LOOP, "for");
@@ -159,6 +166,8 @@ ast_node *create_for_node(char *dir, char *variable, char **options, int show_al
   node->data.for_loop.type = type ? strdup(type) : NULL;
   node->data.for_loop.max_files = max_files;
   node->data.for_loop.block = block;
+  // Ajouter le bloc comme enfant
+  add_child(node, block);
   return node;
 }
 
@@ -169,13 +178,6 @@ ast_node *create_redirection_node(char *file, int fd, int mode)
   node->data.redir.fd = fd;
   node->data.redir.mode = mode;
   return node;
-}
-
-// Ajoute un enfant à un nœud
-void add_child(ast_node *parent, ast_node *child)
-{
-  parent->children = realloc(parent->children, (parent->child_count + 1) * sizeof(ast_node *));
-  parent->children[parent->child_count++] = child;
 }
 
 void free_command(command *cmd)
@@ -296,10 +298,8 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
       }
       // Aller chercher le nom de la variable et le répertoire qui suit
       char *variable = tokens[++(*index)];
-      printf("variable : %s\n", variable);
       (*index)++;
       char *dir = tokens[++(*index)];
-      printf("dir : %s\n", dir);
 
       // Initialiser les options
       int show_all = 0;
@@ -352,8 +352,16 @@ ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
         fprintf(stderr, "for: Invalid syntax\n");
         return NULL;
       }
+      (*index)++;
       variables = realloc(variables, (strlen(variable) + 1) * sizeof(char *));
       ast_node *block = construct_ast_recursive(tokens, index, variables);
+      // Vérifier que la fin du bloc est bien une accolade fermante
+      (*index)--;
+      if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
+      {
+        fprintf(stderr, "for: Invalid syntax\n");
+        return NULL;
+      }
       node = create_for_node(dir, variable, options, show_all, recursive, ext, type, max_files, block);
     }
     else if (strcmp(tokens[*index], "if") == 0)
@@ -426,85 +434,69 @@ void execute_ast(ast_node *node, int *last_return_value, char** variables)
   }
 
   if (node->type == NODE_FOR_LOOP)
-  {
-    // Exécuter la boucle for
+{
     for_loop *loop = &node->data.for_loop;
     DIR *dir = opendir(loop->dir);
     if (dir == NULL)
     {
-      perror("opendir");
-      *last_return_value = 1;
-      return;
+        perror("opendir");
+        *last_return_value = 1;
+        return;
     }
 
     struct dirent *entry;
     int file_count = 0;
 
-    char **original_args = malloc((loop->block->child_count + 1) * sizeof(char *));
-    if (original_args == NULL)
-    {
-      perror("malloc");
-      closedir(dir);
-      *last_return_value = 1;
-      return;
-    }
-    for (int i = 0; i < loop->block->child_count; i++)
-    {
-      original_args[i] = strdup(loop->block->children[i]->data.cmd.name);
-    }
-    original_args[loop->block->child_count] = NULL;
-
+    // Parcourir les fichiers du répertoire
     while ((entry = readdir(dir)) != NULL)
     {
-      if (entry->d_name[0] == '.')
-        continue;
+        // Ignorer les fichiers cachés si show_all n'est pas activé
+        if (entry->d_name[0] == '.' && !loop->show_all)
+            continue;
 
-      char *file_path = malloc(strlen(loop->dir) + strlen(entry->d_name) + 2);
-      if (file_path == NULL)
-      {
-        perror("malloc");
-        closedir(dir);
-        *last_return_value = 1;
-        return;
-      }
-      sprintf(file_path, "%s/%s", loop->dir, entry->d_name);
+        // Créer le chemin complet du fichier
+        char file_path[PATH_MAX];
+        snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
 
-      for (int i = 0; i < loop->block->child_count; i++)
-      {
-        char *expanded = malloc(strlen(original_args[i]) + strlen(file_path) + 1);
-        if (expanded == NULL)
+        // Vérification des options (extension, type, etc.)
+        struct stat file_stat;
+        if (stat(file_path, &file_stat) == -1)
         {
-          perror("malloc");
-          closedir(dir);
-          *last_return_value = 1;
-          return;
+            perror("stat");
+            continue;
         }
-        sprintf(expanded, "%s %s", original_args[i], file_path);
-        free(loop->block->children[i]->data.cmd.name);
-        loop->block->children[i]->data.cmd.name = expanded;
-      }
 
-      execute_ast(loop->block, last_return_value, variables);
-      if (last_return_value != 0)
-      {
-        break;
-      }
+        // Filtrer les fichiers par extension
+        if (loop->ext && !strstr(entry->d_name, loop->ext))
+            continue;
 
-      file_count++;
+        // Filtrer les fichiers par type
+        if (loop->type)
+        {
+            if ((strcmp(loop->type, "file") == 0 && !S_ISREG(file_stat.st_mode)) ||
+                (strcmp(loop->type, "dir") == 0 && !S_ISDIR(file_stat.st_mode)))
+                continue;
+        }
+
+        // Limiter le nombre de fichiers si max_files est défini
+        if (loop->max_files > 0 && file_count >= loop->max_files)
+            break;
+
+        // Ajouter une variable d'environnement temporaire pour la variable du `for`
+        setenv(loop->variable, file_path, 1);
+
+        // Exécuter le bloc de commandes avec la variable remplacée
+        execute_ast(loop->block, last_return_value, variables);
+
+        // Compteur de fichiers traités
+        file_count++;
     }
 
-    for (int i = 0; i < loop->block->child_count; i++)
-    {
-      free(loop->block->children[i]->data.cmd.name);
-      loop->block->children[i]->data.cmd.name = strdup(original_args[i]);
-    }
-
-    for (int i = 0; i < loop->block->child_count; i++)
-    {
-      free(original_args[i]);
-    }
     closedir(dir);
-  }
+
+    // Supprimer la variable temporaire après l'exécution
+    unsetenv(loop->variable);
+}
 
   if (node->type == NODE_COMMAND)
   {
