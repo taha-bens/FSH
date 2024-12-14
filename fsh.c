@@ -319,9 +319,14 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         return NULL;
       }
       // Aller chercher le nom de la variable et le répertoire qui suit
-      char *variable = tokens[++(*index)];
+      // Ajouter $ devant le nom de la variable
+      char *variable = malloc(strlen(tokens[*index + 1]) + 2);
+      variable[0] = '$';
+      strcpy(variable + 1, tokens[*index + 1]);
+      variable[strlen(tokens[*index + 1]) + 1] = '\0';
       (*index)++;
-      char *dir = tokens[++(*index)];
+      (*index)++; // On saute le in
+      char *dir = tokens[(*index + 1)];
 
       // Initialiser les options
       int show_all = 0;
@@ -368,22 +373,47 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         ++(*index);
       }
 
+      (*index)++;
       // Une fois les options traitées, vérifier qu'il existe un bloc entre accolades
       if (tokens[*index] == NULL || strcmp(tokens[*index], "{") != 0)
       {
         fprintf(stderr, "for: Invalid syntax\n");
+        free(variable);
         return NULL;
       }
       (*index)++;
       ast_node *block = construct_ast_recursive(tokens, index);
-      // Vérifier que la fin du bloc est bien une accolade fermante
       (*index)--;
+      // Si il y a un point virgule c'est qu'il y a une autre commande après le bloc et on continue la récursion
+      while (tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      {
+        (*index)++;
+        ast_node *child = construct_ast_recursive(tokens, index);
+        if (child != NULL)
+        {
+          add_child(block, child);
+        }
+        else
+        {
+          free_ast_node(block);
+          free(variable);
+          return NULL;
+        }
+      }
+
+      (*index)--;
+      // Vérifier que la fin du bloc est bien une accolade fermante
+      fprintf(stderr, "tokens[*index] = %s\n", tokens[*index]);
       if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
       {
+        fprintf(stderr, "nike ta mere\n");
         fprintf(stderr, "for: Invalid syntax\n");
+        free_ast_node(block);
+        free(variable);
         return NULL;
       }
       node = create_for_node(dir, variable, options, show_all, recursive, ext, type, max_files, block);
+      free(variable);
     }
     else if (strcmp(tokens[*index], "if") == 0)
     {
@@ -403,7 +433,8 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
  
       // Compter les arguments
       int start_index = *index;
-      while (tokens[*index] != NULL || (tokens[*index] && strcmp(tokens[*index], ";") != 0))
+      // SAINTE MERE DE DIEU C'EST HORRIBLE
+      while (tokens[*index] != NULL && (strcmp(tokens[*index], ";") != 0 && strcmp(tokens[*index], "}") != 0 && strcmp(tokens[*index], "{") != 0 && strcmp(tokens[*index], "|") != 0 && strcmp(tokens[*index], ">") != 0 && strcmp(tokens[*index], "<") != 0 && strcmp(tokens[*index], ">>") != 0 && strcmp(tokens[*index], ">|") != 0))
       {
         (*index)++;
         argc++;
@@ -455,6 +486,7 @@ ast_node *construct_ast(char *line)
   }
 
   free_split(tokens);
+  tokens = NULL;
   return root;
 }
 
@@ -519,7 +551,7 @@ void execute_ast(ast_node *node, int *last_return_value)
       if (loop->max_files > 0 && file_count >= loop->max_files)
         break;
 
-      // Ajouter une variable d'environnement temporaire pour la variable du `for`
+      // Ajouter une variable d'environnement temporaire pour la variable du `for
       setenv(loop->variable, file_path, 1);
 
       // Exécuter le bloc de commandes avec la variable remplacée
