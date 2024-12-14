@@ -496,11 +496,6 @@ void execute_ast(ast_node *node, int *last_return_value)
     return;
   }
 
-  for (int i = 0; i < node->child_count; i++)
-  {
-    execute_ast(node->children[i], last_return_value);
-  }
-
   if (node->type == NODE_FOR_LOOP)
   {
     for_loop *loop = &node->data.for_loop;
@@ -762,6 +757,11 @@ void execute_ast(ast_node *node, int *last_return_value)
         }
       }
     }
+  }
+
+  for (int i = 0; i < node->child_count; i++)
+  {
+    execute_ast(node->children[i], last_return_value);
   }
 }
 
