@@ -39,29 +39,53 @@ bool pop(Stack *stack, char *c) {
     return true;
 }
 
+// Fonction pour vérifier si les espaces sont bien placés autour des accolades et crochets
+bool hasProperSpacing(char *expression) {
+    for (int i = 0; expression[i] != '\0'; i++) {
+        if (expression[i] == '{' || expression[i] == '}') {
+            if (i > 0 && expression[i - 1] != ' ') {
+                return false; // Pas d'espace avant '{' ou '}'
+            }
+            if (expression[i + 1] != ' ' && expression[i + 1] != '\0') {
+                return false; // Pas d'espace après '{' ou '}'
+            }
+        } else if (expression[i] == '[' || expression[i] == ']') {
+            if (i > 0 && expression[i - 1] != ' ') {
+                return false; // Pas d'espace avant '[' ou ']'
+            }
+            if (expression[i + 1] != ' ' && expression[i + 1] != '\0') {
+                return false; // Pas d'espace après '[' ou ']'
+            }
+        }
+    }
+    return true;
+}
+
 
 // Fonction pour vérifier si les parenthèses sont bien formées
-bool areParenthesesWellFormed(const char *expression) {
+bool areParenthesesWellFormed(char *expression) {
     Stack stack;
     initStack(&stack);
 
     // parcours du texte
     for (int i = 0; expression[i] != '\0'; i++) {
         char current = expression[i];
-        
-        // si c'est un charactère qu'on veut on le met dans la stack
-        if (current == '(' || current == '{ ' || current == '[') {
-            push(&stack, current);
+
+        // Empiler les accolades et crochets ouvrants
+        if (current == '{' || current == '[') {
+            if (!push(&stack, current)) {
+                return false; // Dépassement de la capacité de la pile
+            }
         } 
-        else if (current == ')' || current == '} ' || current == ']') {
+        // Dépiler et vérifier les accolades et crochets fermants
+        else if (current == '}' || current == ']') {
             char top;
             if (!pop(&stack, &top)) {
-                return false; // Parenthèse fermante non correspondante
+                return false; // Accolade ou crochet fermant sans correspondance
             }
 
-            // Vérifier si la parenthèse ouvrante dépilée correspond à la parenthèse fermante
-            if ((current == ')' && top != '(') ||
-                (current == '}' && top != '{') ||
+            // Vérifier si l'accolade ou le crochet ouvrant dépilé correspond
+            if ((current == '}' && top != '{') ||
                 (current == ']' && top != '[')) {
                 return false;
             }
@@ -71,13 +95,23 @@ bool areParenthesesWellFormed(const char *expression) {
     return isEmpty(&stack); // on vérifie que c'est bien vide
 }
 
-int main() {
-    const char *test1 = "if TEST { CMD_1 } else { CMD_2 }";
-    const char *test2 = "{[(])}";
-    const char *test3 = "{{[[(())]]}}";
-
-    printf("Expression: %s\nResult: %d\n\n", test1, areParenthesesWellFormed(test1) );
-    printf("Expression: %s\nResult: %d\n\n", test2, areParenthesesWellFormed(test2) );
-    printf("Expression: %s\nResult: %d\n\n", test3, areParenthesesWellFormed(test3) );
-
+// vérifie qu'une expression est valide (bien formé)
+bool validateExpression(char *expression) {
+    return areParenthesesWellFormed(expression) && hasProperSpacing(expression);
 }
+
+
+
+/*
+int main() {
+    char *test1 = "if TEST { CMD_1 } else { CMD_2 }";
+    char *test2 = "if TEST{ CMD_1 } else{ CMD_2 }"; // Mauvais espacement
+    char *test3 = "if TEST { CMD_1 } else {CMD_2}"; // Mauvais espacement
+
+    printf("Expression: %s\nResult: %d\n\n", test1, validateExpression(test1));
+    printf("Expression: %s\nResult: %d\n\n", test2, validateExpression(test2));
+    printf("Expression: %s\nResult: %d\n\n", test3, validateExpression(test3));
+
+    return 0;
+}
+*/

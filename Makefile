@@ -14,7 +14,7 @@ SHLIBS ?= -lreadline
 all: fsh
 
 # Rule to build the executable
-fsh: fsh.c pwd.o ftype.o cd.o for.o
+fsh: fsh.c pwd.o ftype.o cd.o for.o utils.o
 	$(CC) $(CCFLAGS) -o $@ $^ $(SHLIBS)
 
 # Rule to compile the source file into an object file
@@ -28,6 +28,9 @@ cd.o: cd.c
 	$(CC) $(CCFLAGS) -c $<
 
 for.o: for.c
+	$(CC) $(CCFLAGS) -c $<
+
+utils.o: utils.c
 	$(CC) $(CCFLAGS) -c $<
 
 # Clean target
