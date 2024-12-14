@@ -47,7 +47,6 @@ typedef enum node_type
 
 typedef struct command
 {
-  char *name;
   char **args;
   int argc;
 } command;
@@ -110,12 +109,15 @@ ast_node *create_ast_node(node_type type, char *value)
   return node;
 }
 
-ast_node *create_command_node(char *name, char **args, int argc)
+ast_node *create_command_node(char **args, int argc)
 {
-  ast_node *node = create_ast_node(NODE_COMMAND, name);
-  node->data.cmd.name = strdup(name);
-  node->data.cmd.args = malloc((argc + 1) * sizeof(char *)); // NULL terminaison
-
+  if (argc == 0 || args == NULL)
+  {
+    return NULL;
+  }
+  ast_node *node = create_ast_node(NODE_COMMAND, args[0]);
+  size_t size = argc * sizeof(char *);
+  node->data.cmd.args = malloc(size + sizeof(char *));
   for (int i = 0; i < argc; i++)
   {
     node->data.cmd.args[i] = strdup(args[i]);
@@ -166,8 +168,6 @@ ast_node *create_for_node(char *dir, char *variable, char **options, int show_al
   node->data.for_loop.type = type ? strdup(type) : NULL;
   node->data.for_loop.max_files = max_files;
   node->data.for_loop.block = block;
-  // Ajouter le bloc comme enfant
-  add_child(node, block);
   return node;
 }
 
@@ -182,7 +182,6 @@ ast_node *create_redirection_node(char *file, int fd, int mode)
 
 void free_command(command *cmd)
 {
-  free(cmd->name);
   for (int i = 0; i < cmd->argc; i++)
   {
     free(cmd->args[i]);
@@ -211,39 +210,63 @@ void free_ast_node(ast_node *node)
   for (int i = 0; i < node->child_count; i++)
   {
     free_ast_node(node->children[i]);
+    node->children[i] = NULL;
   }
   free(node->children);
+  node->children = NULL;
 
   // Libération des ressources spécifiques
   switch (node->type)
   {
   case NODE_COMMAND:
-    free(node->data.cmd.name);
     for (int i = 0; i < node->data.cmd.argc; i++)
     {
       free(node->data.cmd.args[i]);
+      node->data.cmd.args[i] = NULL;
     }
     free(node->data.cmd.args);
+    node->data.cmd.args = NULL;
     break;
   case NODE_REDIRECTION:
     free(node->data.redir.file);
+    node->data.redir.file = NULL;
     break;
   case NODE_FOR_LOOP:
     free(node->data.for_loop.dir);
+    node->data.for_loop.dir = NULL;
     free(node->data.for_loop.variable);
+    node->data.for_loop.variable = NULL;
+    for (int i = 0; node->data.for_loop.options && node->data.for_loop.options[i]; i++)
+    {
+      free(node->data.for_loop.options[i]);
+      node->data.for_loop.options[i] = NULL;
+    }
+    free(node->data.for_loop.options);
+    node->data.for_loop.options = NULL;
+    free(node->data.for_loop.ext);
+    node->data.for_loop.ext = NULL;
+    free(node->data.for_loop.type);
+    node->data.for_loop.type = NULL;
+    free_ast_node(node->data.for_loop.block);
+    node->data.for_loop.block = NULL;
     break;
   case NODE_IF:
     free(node->data.if_stmt.condition);
+    node->data.if_stmt.condition = NULL;
     free_ast_node(node->data.if_stmt.then_block);
+    node->data.if_stmt.then_block = NULL;
     free_ast_node(node->data.if_stmt.else_block);
+    node->data.if_stmt.else_block = NULL;
     break;
   case NODE_PIPELINE:
     free_pipeline(&node->data.pipe);
+    node->data.pipe.commands = NULL;
     break;
   default:
     break;
   }
   free(node);
+  node = NULL;
 }
 
 pipeline *create_pipeline(command **commands, int nb_commands)
@@ -376,13 +399,11 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
     }
     else
     {
-      char *name = tokens[(*index)++];
       int argc = 0;
-
+ 
       // Compter les arguments
       int start_index = *index;
-      printf("Start index : %d\n", start_index);
-      while (tokens[*index] && strcmp(tokens[*index], ";") != 0)
+      while (tokens[*index] != NULL || (tokens[*index] && strcmp(tokens[*index], ";") != 0))
       {
         (*index)++;
         argc++;
@@ -396,19 +417,14 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       }
 
       // Créer le nœud
-      node = create_command_node(name, args, argc);
-      printf("Commande %s\n", name);
-      printf("Arguments : ");
+      node = create_command_node(args, argc);
+
+      // Libérer les arguments
       for (int i = 0; i < argc; i++)
       {
-        printf("%s ", args[i]);
+        free(args[i]);
       }
-
-      // Passer le point-virgule
-      if (tokens[*index] && strcmp(tokens[*index], ";") == 0)
-      {
-        (*index)++;
-      }
+      free(args);
     }
   }
 
@@ -523,19 +539,19 @@ void execute_ast(ast_node *node, int *last_return_value)
   {
     // Exécuter la commande
     command *cmd = &node->data.cmd;
-    if (strcmp(cmd->name, "exit") == 0)
+    if (strcmp(cmd->args[0], "exit") == 0)
     {
       // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
-      if (cmd->argc > 1)
+      if (cmd->argc > 2)
       {
         fprintf(stderr, "exit: too many arguments\n");
         *last_return_value = 1;
         return;
       }
       // Si on a un argument, c'est la valeur de retour
-      if (cmd->argc == 1)
+      if (cmd->argc == 2)
       {
-        int code = atoi(cmd->args[0]);
+        int code = atoi(cmd->args[1]);
         if (code > 255)
         {
           code %= 256; // Normaliser dans la plage [0, 255]
@@ -544,9 +560,9 @@ void execute_ast(ast_node *node, int *last_return_value)
       }
       cleanup_and_exit(*last_return_value, node);
     }
-    else if (strcmp(cmd->name, "pwd") == 0)
+    else if (strcmp(cmd->args[0], "pwd") == 0)
     {
-      if (cmd->argc != 0)
+      if (cmd->argc != 1)
       {
         fprintf(stderr, "pwd: too many arguments\n");
         *last_return_value = 1;
@@ -554,32 +570,30 @@ void execute_ast(ast_node *node, int *last_return_value)
       }
       *last_return_value = pwd();
     }
-    else if (strcmp(cmd->name, "cd") == 0)
+    else if (strcmp(cmd->args[0], "cd") == 0)
     {
-      if (cmd->argc > 1)
+      if (cmd->argc > 2)
       {
         fprintf(stderr, "cd: invalid number of arguments\n");
         *last_return_value = 1;
         return;
       }
-      *last_return_value = execute_cd(cmd->args[0]);
+      *last_return_value = execute_cd(cmd->args[1]);
     }
-    else if (strcmp(cmd->name, "ftype") == 0)
+    else if (strcmp(cmd->args[0], "ftype") == 0)
     {
-      *last_return_value = ftype(cmd->args[0], ".");
+      *last_return_value = ftype(cmd->args[1], ".");
     }
     else
     {
       pid_t pid = fork();
       if (pid == 0)
       {
-        printf("Executing %s\n", cmd->name);
-        printf("Arguments : ");
         for (int i = 0; i < cmd->argc; i++)
         {
           printf("%s ", cmd->args[i]);
         }
-        execvp(cmd->name, cmd->args);
+        execvp(cmd->args[0], cmd->args);
         perror("execvp");
         exit(EXIT_FAILURE);
       }

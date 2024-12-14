@@ -2,7 +2,7 @@
 
 # Compiler and flags
 CC ?= gcc
-CCFLAGS ?= -Wall 
+CCFLAGS ?= -Wall -fsanitize=address
 
 # Headers
 HEADERS = pwd.h ftype.h cd.h for.h
