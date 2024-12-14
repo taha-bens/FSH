@@ -77,15 +77,13 @@ typedef struct for_loop
   char *dir;
   char *variable;
   char **options;
+  int show_all;
+  int recursive;
+  char *ext;
+  char *type;
+  int max_files;
   ast_node *block;
 } for_loop;
-
-typedef struct sequence
-{
-  command **commands;
-  int nb_commands;
-} sequence;
-
 typedef struct ast_node
 {
   node_type type;             // Type du nœud
@@ -148,11 +146,18 @@ ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_b
   node->data.if_stmt.else_block = else_block;
   return node;
 }
-ast_node *create_for_node(char *dir, char *variable, ast_node *block)
+
+ast_node *create_for_node(char *dir, char *variable, char **options, int show_all, int recursive, char *ext, char *type, int max_files, ast_node *block)
 {
   ast_node *node = create_ast_node(NODE_FOR_LOOP, "for");
   node->data.for_loop.dir = strdup(dir);
   node->data.for_loop.variable = strdup(variable);
+  node->data.for_loop.options = options;
+  node->data.for_loop.show_all = show_all;
+  node->data.for_loop.recursive = recursive;
+  node->data.for_loop.ext = ext ? strdup(ext) : NULL;
+  node->data.for_loop.type = type ? strdup(type) : NULL;
+  node->data.for_loop.max_files = max_files;
   node->data.for_loop.block = block;
   return node;
 }
@@ -182,6 +187,16 @@ void free_command(command *cmd)
   }
   free(cmd->args);
   free(cmd);
+}
+
+void free_pipeline(pipeline *pipe)
+{
+  for (int i = 0; i < pipe->nb_commands; i++)
+  {
+    free_command(pipe->commands[i]);
+  }
+  free(pipe->commands);
+  free(pipe);
 }
 
 // Libère un nœud d'AST
@@ -220,6 +235,9 @@ void free_ast_node(ast_node *node)
     free_ast_node(node->data.if_stmt.then_block);
     free_ast_node(node->data.if_stmt.else_block);
     break;
+  case NODE_PIPELINE:
+    free_pipeline(&node->data.pipe);
+    break;
   default:
     break;
   }
@@ -232,16 +250,6 @@ pipeline *create_pipeline(command **commands, int nb_commands)
   pipe->commands = commands;
   pipe->nb_commands = nb_commands;
   return pipe;
-}
-
-void free_pipeline(pipeline *pipe)
-{
-  for (int i = 0; i < pipe->nb_commands; i++)
-  {
-    free_command(pipe->commands[i]);
-  }
-  free(pipe->commands);
-  free(pipe);
 }
 
 redirection *create_redirection(char *file, int fd, int mode)
@@ -260,12 +268,19 @@ void free_redirection(redirection *red)
 }
 
 // Fonction récursive pour construire l'AST
-ast_node *construct_ast_recursive(char **tokens, int *index)
+ast_node *construct_ast_recursive(char **tokens, int *index, char **variables)
 {
   ast_node *node = NULL;
 
   while (tokens[*index] != NULL)
   {
+    if (strcmp(tokens[*index], "}") == 0)
+    {
+      (*index)++;
+      // On a fini le bloc for il faut quitter la récursion
+      break;
+    }
+    else
     if (strcmp(tokens[*index], ";") == 0)
     {
       (*index)++;
@@ -273,22 +288,83 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
     }
     else if (strcmp(tokens[*index], "for") == 0)
     {
+      // Vérifier la syntaxe le premier argument est nécessairement le nom de la variable
+      if (tokens[*index + 1] == NULL || tokens[*index + 2] == NULL || tokens[*index + 3] == NULL || tokens[*index + 4] == NULL)
+      {
+        write(STDERR_FILENO, "for: Invalid syntax\n", 21);
+        return NULL;
+      }
+      // Aller chercher le nom de la variable et le répertoire qui suit
+      char *variable = tokens[++(*index)];
+      printf("variable : %s\n", variable);
       (*index)++;
-      char *dir = tokens[(*index)++];
-      char *variable = tokens[(*index)++];
-      ast_node *block = construct_ast_recursive(tokens, index);
-      node = create_for_node(dir, variable, block);
+      char *dir = tokens[++(*index)];
+      printf("dir : %s\n", dir);
+
+      // Initialiser les options
+      int show_all = 0;
+      int recursive = 0;
+      char *ext = NULL;
+      char *type = NULL;
+      int max_files = 0;
+      char **options = NULL;
+      int options_len = 0;
+
+      // Traiter les options
+      while (tokens[*index] && tokens[*index][0] == '-')
+      {
+        if (strcmp(tokens[*index], "-A") == 0)
+        {
+          show_all = 1;
+        }
+        else if (strcmp(tokens[*index], "-r") == 0)
+        {
+          recursive = 1;
+        }
+        else if (strcmp(tokens[*index], "-e") == 0 && tokens[*index + 1])
+        {
+          ext = tokens[++(*index)];
+        }
+        else if (strcmp(tokens[*index], "-t") == 0 && tokens[*index + 1])
+        {
+          type = tokens[++(*index)];
+        }
+        else if (strcmp(tokens[*index], "-p") == 0 && tokens[*index + 1])
+        {
+          max_files = atoi(tokens[++(*index)]);
+        }
+        options = realloc(options, (options_len + 1) * sizeof(char *));
+        options[options_len++] = strdup(tokens[*index]);
+        (*index)++;
+      }
+
+      // On a fini de traiter les options si les options sont vides on les libère
+      if (options_len == 0)
+      {
+        free(options);
+        options = NULL;
+        ++(*index);
+      }
+
+      // Une fois les options traitées, vérifier qu'il existe un bloc entre accolades
+      if (tokens[*index] == NULL || strcmp(tokens[*index], "{") != 0)
+      {
+        fprintf(stderr, "for: Invalid syntax\n");
+        return NULL;
+      }
+      variables = realloc(variables, (strlen(variable) + 1) * sizeof(char *));
+      ast_node *block = construct_ast_recursive(tokens, index, variables);
+      node = create_for_node(dir, variable, options, show_all, recursive, ext, type, max_files, block);
     }
     else if (strcmp(tokens[*index], "if") == 0)
     {
-      (*index)++;
       char *condition = tokens[(*index)++];
-      ast_node *then_block = construct_ast_recursive(tokens, index);
+      ast_node *then_block = construct_ast_recursive(tokens, index, variables);
       ast_node *else_block = NULL;
       if (tokens[*index] && strcmp(tokens[*index], "else") == 0)
       {
         (*index)++;
-        else_block = construct_ast_recursive(tokens, index);
+        else_block = construct_ast_recursive(tokens, index, variables);
       }
       node = create_if_node(condition, then_block, else_block);
     }
@@ -310,18 +386,26 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
 }
 
 // Fonction principale pour construire l'AST
-ast_node *construct_ast(char *line)
+ast_node *construct_ast(char *line, char **variables)
 {
   char **tokens = str_split(line, ' ');
   int index = 0;
+  // Trouver tous les ; qui sont en dehors des blocs
   ast_node *root = create_ast_node(NODE_SEQUENCE, ";");
+
 
   while (tokens[index] != NULL)
   {
-    ast_node *child = construct_ast_recursive(tokens, &index);
-    if (child)
+    ast_node *child = construct_ast_recursive(tokens, &index, variables);
+    if (child != NULL)
     {
       add_child(root, child);
+    }
+    else
+    {
+      free_ast_node(root);
+      root = NULL;
+      break;
     }
   }
 
@@ -528,6 +612,10 @@ int main()
     free(current_dir);
     free(prompt_dir);
 
+    int saved_stdin = dup(STDIN_FILENO);
+    int saved_stdout = dup(STDOUT_FILENO);
+    int saved_stderr = dup(STDERR_FILENO);
+
     line = readline(formatted_prompt);
     if (line == NULL)
     {
@@ -543,22 +631,37 @@ int main()
     }
 
     add_history(line);
+    // Faire l'allocation des variables on considèrera que les variables sont max de longueur 1
+    char **variables = malloc(1 * sizeof(char *));
+    if (variables == NULL)
+    {
+      perror("malloc");
+      return 1;
+    }
+    variables[0] = NULL;
 
-    // Parse the command and build the AST
-    ast_node *root = construct_ast(cleaned_line);
+    // Parser la ligne de commande
+    ast_node *root = construct_ast(cleaned_line, variables);
     free(cleaned_line);
+    if (root == NULL)
+    {
+      last_return_value = 2;
+      free(line);
+      continue;
+    }
 
-    char** variables = NULL;
-
-    // Execute the AST
+    // Exécuter l'AST
     execute_ast(root, &last_return_value, variables);
+
+    // Restaurer les descripteurs de fichiers standard
+    restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
 
     if(variables != NULL)
     {
       free(variables);
     }
 
-    // Free the AST
+    // Libérer la mémoire
     free_ast_node(root);
 
     free(line);
