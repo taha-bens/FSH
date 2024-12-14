@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -32,28 +33,17 @@ int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void execute_command(char **splited, int *last_return_value, char ***commands, char **line);
 void cleanup_and_exit(char *line, char **commands, char **splited, int last_return_value);
+typedef struct ast_node ast_node;
 
 typedef enum node_type
 {
-  NODE_COMMAND,  // Une commande simple
-  NODE_PIPELINE, // Un pipeline de commandes
-  NODE_FOR_LOOP,  // Une boucle for avec des commandes
+  NODE_COMMAND,     // Une commande simple
+  NODE_PIPELINE,    // Un pipeline de commandes
+  NODE_FOR_LOOP,    // Une boucle for avec des commandes
   NODE_REDIRECTION, // Une redirection de fichier
-  NODE_IF // Une condition if
+  NODE_IF,          // Une condition if
+  NODE_SEQUENCE     // Une séquence de commandes (séparées par des points-virgules)
 } node_type;
-
-typedef struct ast_node
-{
-  node_type type;
-  char *value;                // Valeur principale (par exemple, "for", "ls", "|")
-  struct ast_node **children; // Enfants (par exemple, commandes d'un pipeline ou boucle)
-  int child_count;            // Nombre d'enfants
-} ast_node;
-
-typedef struct ast
-{
-  ast_node *root;
-} ast;
 
 typedef struct command
 {
@@ -64,7 +54,7 @@ typedef struct command
 
 typedef struct pipeline
 {
-  command *commands;
+  command **commands;
   int nb_commands;
 } pipeline;
 
@@ -82,14 +72,107 @@ typedef struct if_statement
   command *else_block;
 } if_statement;
 
+typedef struct for_loop
+{
+  char *dir;
+  char *variable;
+  char **options;
+  ast_node *block;
+} for_loop;
+
+typedef struct sequence
+{
+  command **commands;
+  int nb_commands;
+} sequence;
+
+typedef struct ast_node
+{
+  node_type type;             // Type du nœud
+  struct ast_node **children; // Enfants (par exemple, commandes d'un pipeline ou boucle)
+  int child_count;            // Nombre d'enfants
+  union
+  {
+    command cmd;
+    pipeline pipe;
+    redirection redir;
+    if_statement if_stmt;
+    for_loop for_loop;
+  } data;
+} ast_node;
+
+typedef struct ast
+{
+  ast_node *root;
+} ast;
+
 // Crée un nœud d'AST
 ast_node *create_ast_node(node_type type, char *value)
 {
   ast_node *node = malloc(sizeof(ast_node));
   node->type = type;
-  node->value = strdup(value);
   node->children = NULL;
   node->child_count = 0;
+  memset(&node->data, 0, sizeof(node->data));
+  return node;
+}
+
+ast_node *create_command_node(char *name, char **args, int argc)
+{
+  ast_node *node = create_ast_node(NODE_COMMAND, name);
+  node->data.cmd.name = strdup(name);
+  // Les options sont marquées par un tiret
+  int i = 1;
+  while (i < argc && args[i][0] == '-')
+  {
+    i++;
+  }
+  node->data.cmd.args = malloc(argc * sizeof(char *));
+  while (i < argc && not_in_brackets(args[i], strlen(args[i])))
+  {
+    node->data.cmd.args[i] = strdup(args[i]);
+
+  }
+  node->data.cmd.argc = argc;
+  return node;
+}
+
+ast_node *create_pipeline_node(command **commands, int nb_commands)
+{
+  ast_node *node = create_ast_node(NODE_PIPELINE, "|");
+  node->data.pipe.commands = malloc(nb_commands * sizeof(command *));
+  for (int i = 0; i < nb_commands; i++)
+  {
+    node->data.pipe.commands[i] = commands[i];
+  }
+  node->data.pipe.nb_commands = nb_commands;
+  return node;
+}
+
+ast_node *create_if_node(char *condition, command *then_block, command *else_block)
+{
+  ast_node *node = create_ast_node(NODE_IF, condition);
+  node->data.if_stmt.condition = strdup(condition);
+  node->data.if_stmt.then_block = then_block;
+  node->data.if_stmt.else_block = else_block;
+  return node;
+}
+
+ast_node *create_for_node(char *dir, char *variable, ast_node *block)
+{
+  ast_node *node = create_ast_node(NODE_FOR_LOOP, "for");
+  node->data.for_loop.dir = strdup(dir);
+  node->data.for_loop.variable = strdup(variable);
+  node->data.for_loop.block = block;
+  return node;
+}
+
+ast_node *create_redirection_node(char *file, int fd, int mode)
+{
+  ast_node *node = create_ast_node(NODE_REDIRECTION, file);
+  node->data.redir.file = strdup(file);
+  node->data.redir.fd = fd;
+  node->data.redir.mode = mode;
   return node;
 }
 
@@ -107,15 +190,56 @@ void add_child(ast_node *parent, ast_node *child)
   parent->children[parent->child_count++] = child;
 }
 
-// Libère un nœud d'AST
-void free_ast(ast_node *node)
+void free_command(command *cmd)
 {
+  free(cmd->name);
+  for (int i = 0; i < cmd->argc; i++)
+  {
+    free(cmd->args[i]);
+  }
+  free(cmd->args);
+  free(cmd);
+}
+
+// Libère un nœud d'AST
+void free_ast_node(ast_node *node)
+{
+  if (!node)
+    return;
+
+  // Libération des enfants
   for (int i = 0; i < node->child_count; i++)
   {
-    free_ast(node->children[i]);
+    free_ast_node(node->children[i]);
   }
   free(node->children);
-  free(node->value);
+
+  // Libération des ressources spécifiques
+  switch (node->type)
+  {
+  case NODE_COMMAND:
+    free(node->data.cmd.name);
+    for (int i = 0; i < node->data.cmd.argc; i++)
+    {
+      free(node->data.cmd.args[i]);
+    }
+    free(node->data.cmd.args);
+    break;
+  case NODE_REDIRECTION:
+    free(node->data.redir.file);
+    break;
+  case NODE_FOR_LOOP:
+    free(node->data.for_loop.dir);
+    free(node->data.for_loop.variable);
+    break;
+  case NODE_IF:
+    free(node->data.if_stmt.condition);
+    free_command(node->data.if_stmt.then_block);
+    free_command(node->data.if_stmt.else_block);
+    break;
+  default:
+    break;
+  }
   free(node);
 }
 
@@ -137,18 +261,7 @@ command *create_command(char *name, char **args, int argc)
   return cmd;
 }
 
-void free_command(command *cmd)
-{
-  free(cmd->name);
-  for (int i = 0; i < cmd->argc; i++)
-  {
-    free(cmd->args[i]);
-  }
-  free(cmd->args);
-  free(cmd);
-}
-
-pipeline *create_pipeline(command *commands, int nb_commands)
+pipeline *create_pipeline(command **commands, int nb_commands)
 {
   pipeline *pipe = malloc(sizeof(pipeline));
   pipe->commands = commands;
@@ -160,7 +273,7 @@ void free_pipeline(pipeline *pipe)
 {
   for (int i = 0; i < pipe->nb_commands; i++)
   {
-    free_command(&pipe->commands[i]);
+    free_command(pipe->commands[i]);
   }
   free(pipe->commands);
   free(pipe);
@@ -184,67 +297,153 @@ void free_redirection(redirection *red)
 // Fonction principale pour construire l'AST
 ast_node *construct_ast(char *line)
 {
-  char *token = strtok(line, " ");
-  ast_node *root = NULL;
-  ast_node *current = NULL;
+  char **commands = str_split(line, ' ');
+  int i = 0;
+  ast_node *root = create_ast_node(NODE_SEQUENCE, ";");
+  free_split(commands);
+  return root;
+}
 
-  while (token)
+void execute_ast(ast_node *node, int *last_return_value)
+{
+  if (node == NULL)
   {
-    if (strcmp(token, "for") == 0)
+    return;
+  }
+
+  for (int i = 0; i < node->child_count; i++)
+  {
+    execute_ast(node->children[i], last_return_value);
+  }
+
+  if (node->type == NODE_COMMAND)
+  {
+    // Exécuter la commande
+    command *cmd = &node->data.cmd;
+    pid_t pid = fork();
+    if (pid == 0)
     {
-      // Gestion de la boucle "for"
-      ast_node *for_node = create_ast_node(NODE_FOR_LOOP, "for");
-      token = strtok(NULL, " "); // Variable
-      add_child(for_node, create_ast_node(NODE_COMMAND, token));
-      token = strtok(NULL, " "); // "in"
-      token = strtok(NULL, " "); // Liste
-      add_child(for_node, create_ast_node(NODE_COMMAND, token));
-      token = strtok(NULL, " "); // "{"
-      while (token && strcmp(token, "}") != 0)
-      {
-        add_child(for_node, create_ast_node(NODE_COMMAND, token));
-        token = strtok(NULL, " ");
-      }
-      if (!root)
-        root = for_node;
-      else
-        add_child(current, for_node);
-      current = for_node;
+      execvp(cmd->name, cmd->args);
+      perror("execvp");
+      exit(EXIT_FAILURE);
     }
-    else if (strcmp(token, "|") == 0)
+    else if (pid < 0)
     {
-      // Gestion du pipeline
-      ast_node *pipeline_node = create_ast_node(NODE_PIPELINE, "|");
-      if (current)
-        add_child(pipeline_node, current);
-      current = pipeline_node;
-    }
-    else if (strcmp(token, ">") == 0 || strcmp(token, ">>") == 0 || strcmp(token, "<") == 0 || strcmp(token, "2>") || strcmp(token, ">|") == 0 || strcmp(token, "2>>") == 0 || strcmp(token, "2>|") == 0)
-    {
-      // Gestion des redirections
-      ast_node *redir_node = create_ast_node(NODE_COMMAND, token);
-      token = strtok(NULL, " ");
-      add_child(redir_node, create_ast_node(NODE_COMMAND, token));
-      if (!current)
-        current = redir_node;
-      else
-        add_child(current, redir_node);
+      perror("fork");
     }
     else
     {
-      // Commande ou argument
-      ast_node *cmd_node = create_ast_node(NODE_COMMAND, token);
-      if (!root)
-        root = cmd_node;
-      else if (current)
-        add_child(current, cmd_node);
-      current = cmd_node;
+      int status;
+      waitpid(pid, &status, 0);
+      if (WIFEXITED(status))
+      {
+        *last_return_value = WEXITSTATUS(status);
+      }
+      else
+      {
+        *last_return_value = 1; // Erreur par défaut
+      }
     }
-    token = strtok(NULL, " ");
   }
+  else if (node->type == NODE_PIPELINE)
+  {
+    // Exécuter le pipeline
+    pipeline *pipeline_data = &node->data.pipe;
+    int pipefd[2];
+    pid_t pid1, pid2;
 
-  return root;
+    if (pipe(pipefd) == -1)
+    {
+      perror("pipe");
+      return;
+    }
+
+    pid1 = fork();
+    if (pid1 == 0)
+    {
+      // Enfant 1
+      dup2(pipefd[1], STDOUT_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      execvp(pipeline_data->commands[0]->name, pipeline_data->commands[0]->args);
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid1 < 0)
+    {
+      perror("fork");
+      return;
+    }
+
+    pid2 = fork();
+    if (pid2 == 0)
+    {
+      // Enfant 2
+      dup2(pipefd[0], STDIN_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      execvp(pipeline_data->commands[1]->name, pipeline_data->commands[1]->args);
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid2 < 0)
+    {
+      perror("fork");
+      return;
+    }
+
+    close(pipefd[0]);
+    close(pipefd[1]);
+
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+  }
+  else if (node->type == NODE_REDIRECTION)
+  {
+    // Exécuter la redirection
+    redirection *redir = &node->data.redir;
+    int saved_fd = dup(redir->fd);
+    int file_fd = open(redir->file, redir->mode, 0644);
+    if (file_fd == -1)
+    {
+      perror("open");
+      return;
+    }
+    dup2(file_fd, redir->fd);
+    close(file_fd);
+
+    execute_ast(node->children[0], last_return_value);
+
+    dup2(saved_fd, redir->fd);
+    close(saved_fd);
+  }
+  else if (node->type == NODE_FOR_LOOP)
+  {
+    // Exécuter la boucle for
+    for_loop *loop = &node->data.for_loop;
+    DIR *dir = opendir(loop->dir);
+    if (dir == NULL)
+    {
+      perror("opendir");
+      return;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+      if (entry->d_name[0] == '.')
+        continue;
+
+      char *var_value = entry->d_name;
+      setenv(loop->variable, var_value, 1);
+
+      execute_ast(node->children[0], last_return_value);
+    }
+
+    closedir(dir);
+  }
 }
+
 int main()
 {
   int last_return_value = 0;
@@ -283,36 +482,18 @@ int main()
     }
 
     add_history(line);
-    char **commands = str_split(cleaned_line, ';');
+
+    // Parse the command and build the AST
+    ast_node *root = construct_ast(cleaned_line);
     free(cleaned_line);
 
-    for (int cmd_idx = 0; commands[cmd_idx]; cmd_idx++)
-    {
-      char **splited = str_split(commands[cmd_idx], ' ');
+    // Execute the AST
+    execute_ast(root, &last_return_value);
 
-      // Sauvegarder les descripteurs de fichiers d'origine
-      int saved_stdin = dup(STDIN_FILENO);
-      int saved_stdout = dup(STDOUT_FILENO);
-      int saved_stderr = dup(STDERR_FILENO);
-
-      // Gestion des redirections
-      if (handle_redirections(splited, &last_return_value) == -1)
-      {
-        free_split(splited);
-        continue;
-      }
-
-      // Exécuter la commande
-      execute_command(splited, &last_return_value, &commands, &line);
-
-      // Restaurer les descripteurs de fichiers d'origine
-      restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
-
-      free_split(splited);
-    }
+    // Free the AST
+    free_ast_node(root);
 
     free(line);
-    free_split(commands);
   }
 
   return 0;
