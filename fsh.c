@@ -16,6 +16,7 @@
 #include "headers/ftype.h"
 #include "headers/cd.h"
 #include "headers/for.h"
+#include "headers/utils.h"
 
 #define RESET_COLOR "\033[00m"
 #define RED_COLOR "\033[91m"
