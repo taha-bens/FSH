@@ -515,14 +515,90 @@ void execute_ast(ast_node *node, int *last_return_value)
   if (node->type == NODE_FOR_LOOP)
   {
     for_loop *loop = &node->data.for_loop;
-    DIR *dir = opendir(loop->dir);
-    if (dir == NULL)
+    // Vérifier que dir est une variable cad qu'elle contient un $ ds cas essayer de substituer la variable
+    char *dollar_pos = strchr(loop->dir, '$');
+    char *original_dir = strdup(loop->dir);
+    if (dollar_pos != NULL)
     {
-      perror("opendir");
+      // On a un $ on doit faire une substitution
+      // Les variables ne sont qu'une lettre
+      char *var_name = malloc(2);
+      strncpy(var_name, dollar_pos + 1, 1);
+      var_name[1] = '\0';
+      char *var_value = getenv(var_name);
+      if (var_value == NULL)
+      {
+        fprintf(stderr, "Variable %s not set\n", var_name);
+        *last_return_value = 1;
+        free(var_name);
+        return;
+      }
+      // On a la valeur de la variable on peut la remplacer
+      size_t expanded_len = strlen(loop->dir) + strlen(var_value) - 1;
+      char *expanded = malloc(expanded_len + 1);
+      if (expanded == NULL)
+      {
+        perror("malloc");
+        *last_return_value = 1;
+        free(var_name);
+        return;
+      }
+      char *suffix = dollar_pos + 1;
+      strncpy(expanded, loop->dir, dollar_pos - loop->dir);
+      expanded[dollar_pos - loop->dir] = '\0';
+      strcat(expanded, var_value);
+      strcat(expanded, suffix + 1);
+      free(loop->dir);
+      loop->dir = expanded;
+      free(var_name);
+    }
+    struct stat path_stat;
+    if (stat(loop->dir, &path_stat) == -1)
+    {
+      fprintf(stderr, "command_for_run: %s\n", loop->dir);
+      perror("command_for_run");
+      free(loop->dir);
+      loop->dir = NULL;
+
+      // Restaurer dir à sa valeur d'origine
+      loop->dir = strdup(original_dir);
+
+      // Libérer la mémoire allouée pour le chemin du répertoire
+      free(original_dir);
       *last_return_value = 1;
       return;
     }
 
+    if (!S_ISDIR(path_stat.st_mode))
+    {
+      fprintf(stderr, "command_for_run: Not a directory\n");
+      free(loop->dir);
+      loop->dir = NULL;
+
+      // Restaurer dir à sa valeur d'origine
+      loop->dir = strdup(original_dir);
+
+      // Libérer la mémoire allouée pour le chemin du répertoire
+      free(original_dir);
+      *last_return_value = 1;
+      return;
+    }
+
+    DIR *dir = opendir(loop->dir);
+    if (dir == NULL)
+    {
+      perror("command_for_run");
+      *last_return_value = 1;
+      free(loop->dir);
+      loop->dir = NULL;
+
+      // Restaurer dir à sa valeur d'origine
+      loop->dir = strdup(original_dir);
+
+      // Libérer la mémoire allouée pour le chemin du répertoire
+      free(original_dir);
+      return;
+    }
     struct dirent *entry;
     int file_count = 0;
 
@@ -570,6 +646,15 @@ void execute_ast(ast_node *node, int *last_return_value)
       // Compteur de fichiers traités
       file_count++;
     }
+
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
 
     // Supprimer la variable d'environnement temporaire
     unsetenv(loop->variable);
@@ -773,10 +858,6 @@ void execute_ast(ast_node *node, int *last_return_value)
       pid_t pid = fork();
       if (pid == 0)
       {
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          printf("%s ", cmd->args[i]);
-        }
         execvp(cmd->args[0], cmd->args);
         perror("execvp");
         exit(EXIT_FAILURE);
