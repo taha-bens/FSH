@@ -592,14 +592,54 @@ void execute_ast(ast_node *node, int *last_return_value)
     // Regarder dans args si on a pas une substitution de variable à faire
     for (int i = 0; i < cmd->argc; i++)
     {
-      if (cmd->args[i][0] == '$')
+      // Regarder chaque chaines de caractères pour voir si on a un $
+      char *dollar_pos = strchr(cmd->args[i], '$');
+      while (dollar_pos != NULL)
       {
-        char *var = getenv(cmd->args[i] + 1);
-        if (var != NULL)
+        // On a un $ on doit faire une substitution
+        // Les variables ne sont qu'une lettre
+        char *var_name = malloc(2);
+        strncpy(var_name, dollar_pos + 1, 1);
+        var_name[1] = '\0';
+        char *var_value = getenv(var_name);
+        if (var_value == NULL)
         {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(var);
+          fprintf(stderr, "Variable %s not set\n", var_name);
+          *last_return_value = 1;
+          for (int j = 0; j < cmd->argc; j++)
+          {
+            free(cmd->args[j]);
+            cmd->args[j] = strdup(copy_args[j]);
+          }
+          for (int j = 0; j < cmd->argc; j++)
+          {
+            free(copy_args[j]);
+          }
+          free(copy_args);
+          free(var_name);
+          return;
         }
+        // On a la valeur de la variable on peut la remplacer
+        size_t expanded_len = strlen(cmd->args[i]) + strlen(var_value) - 1;
+        char *expanded = malloc(expanded_len + 1);
+        if (expanded == NULL)
+        {
+          perror("malloc");
+          *last_return_value = 1;
+          free(var_name);
+          return;
+        }
+        char *suffix = dollar_pos + 1;
+        strncpy(expanded, cmd->args[i], dollar_pos - cmd->args[i]);
+        expanded[dollar_pos - cmd->args[i]] = '\0';
+        strcat(expanded, var_value);
+        strcat(expanded, suffix + 1);
+        free(cmd->args[i]);
+        cmd->args[i] = expanded;
+        free(var_name);
+
+        // Rechercher la prochaine occurrence de $
+        dollar_pos = strchr(cmd->args[i], '$');
       }
     }
     if (strcmp(cmd->args[0], "exit") == 0)
