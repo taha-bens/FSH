@@ -703,23 +703,14 @@ void execute_ast(ast_node *node, int *last_return_value)
     while ((cur_path = pop(&stack)) != NULL)
     {
       DIR *cur_dir = opendir(cur_path);
-      free(cur_path);
       if (cur_dir == NULL)
       {
         perror("opendir");
+        free(cur_path);
         break;
       }
       while ((entry = readdir(cur_dir)) != NULL)
       {
-        // Si il y a un dossier et qu'on est en mode récursif on ajoute le dossier à la pile
-        struct stat entry_stat;
-        char entry_path[PATH_MAX];
-        snprintf(entry_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
-
-        if (loop->recursive && stat(entry_path, &entry_stat) == 0 && S_ISDIR(entry_stat.st_mode))
-        {
-          stack = push(stack, strdup(entry_path));
-        }
 
         // Ignorer . et ..
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
@@ -731,7 +722,7 @@ void execute_ast(ast_node *node, int *last_return_value)
 
         // Créer le chemin complet du fichier
         char file_path[PATH_MAX];
-        snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+        snprintf(file_path, PATH_MAX, "%s/%s", cur_path, entry->d_name);
 
         // Vérification des options (extension, type, etc.)
         struct stat file_stat;
@@ -739,6 +730,11 @@ void execute_ast(ast_node *node, int *last_return_value)
         {
           perror("stat");
           continue;
+        }
+
+        if (loop->recursive && stat(file_path, &file_stat) == 0 && S_ISDIR(file_stat.st_mode))
+        {
+          stack = push(stack, strdup(file_path));
         }
 
         // Filtrer les fichiers par type
@@ -769,6 +765,7 @@ void execute_ast(ast_node *node, int *last_return_value)
         file_count++;
       }
       closedir(cur_dir);
+      free(cur_path);
     }
     free_stack(stack);
 
