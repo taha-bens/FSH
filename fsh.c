@@ -753,8 +753,15 @@ void execute_ast(ast_node *node, int *last_return_value)
         if (loop->ext)
         {
           char *file_ext = strrchr(entry->d_name, '.');
-          if (file_ext == NULL || strcmp(file_ext + 1, loop->ext) != 0)
+          if (file_ext == NULL || strcmp(file_ext, loop->ext) != 0)
             continue;
+          // On a trouvé un fichier qui correspond à l'extension recherchée on supprime toute la chaine
+          // pour ne garder que le nom du fichier on change donc file_path
+          char *file_name = malloc(strlen(entry->d_name) + 1);
+          strcpy(file_name, entry->d_name);
+          file_name[strlen(entry->d_name) - strlen(file_ext)] = '\0';
+          snprintf(file_path, PATH_MAX, "%s/%s", cur_path, file_name);
+          free(file_name);
         }
 
         // Ajouter le fichier au tableau
