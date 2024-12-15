@@ -5,10 +5,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -164,7 +166,7 @@ ast_node *create_for_node(char *dir, char *variable, char **options, int show_al
   node->data.for_loop.options = options;
   node->data.for_loop.show_all = show_all;
   node->data.for_loop.recursive = recursive;
-  node->data.for_loop.ext = ext ? strdup(ext) : NULL;
+  node->data.for_loop.ext = ext; // Aliasing mais bon on s'en fout
   node->data.for_loop.type = type ? strdup(type) : NULL;
   node->data.for_loop.max_files = max_files;
   node->data.for_loop.block = block;
@@ -292,6 +294,60 @@ void free_redirection(redirection *red)
   free(red);
 }
 
+// Ajouter une pile pour gérer les dossiers à traiter
+typedef struct stack_dir
+{
+  DIR *dir;
+  struct stack_dir *next;
+} stack_dir;
+
+stack_dir *create_stack()
+{
+  stack_dir *stack = malloc(sizeof(stack_dir));
+  if (stack == NULL)
+  {
+    perror("malloc");
+    return NULL;
+  }
+  stack->dir = NULL;
+  stack->next = NULL;
+  return stack; 
+}
+
+stack_dir *push(stack_dir *stack, DIR *dir)
+{
+  stack_dir *new_node = malloc(sizeof(stack_dir));
+  if (new_node == NULL)
+  {
+    perror("malloc");
+    return NULL;
+  }
+  new_node->dir = dir;
+  new_node->next = stack;
+  return new_node;
+}
+
+stack_dir *pop(stack_dir *stack)
+{
+  if (stack == NULL)
+  {
+    return NULL;
+  }
+  stack_dir *temp = stack;
+  stack = stack->next;
+  closedir(temp->dir);
+  free(temp);
+  return stack;
+}
+
+void free_stack(stack_dir *stack)
+{
+  while (stack != NULL)
+  {
+    stack = pop(stack);
+  }
+}
+
 // Fonction récursive pour construire l'AST
 ast_node *construct_ast_recursive(char **tokens, int *index)
 {
@@ -333,7 +389,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       (*index)++; // In
       (*index)++; // Le nom du répertoire
       char *dir = tokens[(*index)];
-      
+
       (*index)++;
 
       // Initialiser les options
@@ -358,7 +414,16 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         }
         else if (strcmp(tokens[*index], "-e") == 0 && tokens[*index + 1])
         {
-          ext = tokens[++(*index)];
+          // Allouer de la mémoire pour l'extension avec le point
+          ext = malloc(strlen(tokens[*index + 1]) + 2); // +2 pour le point et le caractère nul
+          if (ext == NULL)
+          {
+            perror("malloc");
+            return NULL;
+          }
+          // Ajouter un point pour l'extension
+          strcpy(ext, ".");
+          strcat(ext, tokens[++(*index)]);
         }
         else if (strcmp(tokens[*index], "-t") == 0 && tokens[*index + 1])
         {
@@ -610,50 +675,118 @@ void execute_ast(ast_node *node, int *last_return_value)
     struct dirent *entry;
     int file_count = 0;
 
-    // Parcourir les fichiers du répertoire
-    while ((entry = readdir(dir)) != NULL)
+    // Obtenir la liste correcte des fichiers en les stockant dans un tableau
+    char **files = malloc(1 * sizeof(char *));
+    if (files == NULL)
     {
-      // Ignorer les fichiers cachés si show_all n'est pas activé
-      if (entry->d_name[0] == '.' && !loop->show_all)
-        continue;
+      perror("malloc");
+      *last_return_value = 1;
+      free(loop->dir);
+      loop->dir = NULL;
 
-      // Créer le chemin complet du fichier
-      char file_path[PATH_MAX];
-      snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+      // Restaurer dir à sa valeur d'origine
+      loop->dir = strdup(original_dir);
 
-      // Vérification des options (extension, type, etc.)
-      struct stat file_stat;
-      if (stat(file_path, &file_stat) == -1)
+      // Libérer la mémoire allouée pour le chemin du répertoire
+      free(original_dir);
+      return;
+    }
+    int files_len = 0;
+    stack_dir *stack = create_stack();
+    stack = push(stack, dir);
+    DIR *cur_dir = NULL;
+
+    while (1)
+    {
+      cur_dir = pop(stack)->dir;
+      while ((entry = readdir(cur_dir)) != NULL)
       {
-        perror("stat");
-        continue;
-      }
+        // Si il y a un dossier et qu'on est en mode récursif on ajoute le dossier à la pile
+        struct stat entry_stat;
+        char entry_path[PATH_MAX];
+        snprintf(entry_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+        if (loop->recursive && stat(entry_path, &entry_stat) == 0 && S_ISDIR(entry_stat.st_mode))
+        {
+          stack = push(stack, opendir(entry->d_name));
+        }
 
-      // Filtrer les fichiers par extension
-      if (loop->ext && !strstr(entry->d_name, loop->ext))
-        continue;
-
-      // Filtrer les fichiers par type
-      if (loop->type)
-      {
-        if ((strcmp(loop->type, "file") == 0 && !S_ISREG(file_stat.st_mode)) ||
-            (strcmp(loop->type, "dir") == 0 && !S_ISDIR(file_stat.st_mode)))
+        // Ignorer . et ..
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
           continue;
+
+        // Ignorer les fichiers cachés si show_all n'est pas activé
+        if (entry->d_name[0] == '.' && !loop->show_all) // Fichier caché
+          continue;
+
+        // Créer le chemin complet du fichier
+        char file_path[PATH_MAX];
+        snprintf(file_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+
+        // Vérification des options (extension, type, etc.)
+        struct stat file_stat;
+        if (stat(file_path, &file_stat) == -1)
+        {
+          perror("stat");
+          continue;
+        }
+
+        // Filtrer les fichiers par type
+        if (loop->type)
+        {
+          if ((strcmp(loop->type, "f") == 0 && !S_ISREG(file_stat.st_mode)) ||
+              (strcmp(loop->type, "d") == 0 && !S_ISDIR(file_stat.st_mode)))
+            continue;
+        }
+
+        // Limiter le nombre de fichiers si max_files est défini
+        if (loop->max_files > 0 && file_count >= loop->max_files)
+          break;
+
+        // Filtrer les fichiers par extension
+        if (loop->ext)
+        {
+          char *file_ext = strrchr(entry->d_name, '.');
+          if (file_ext == NULL || strcmp(file_ext, loop->ext) != 0)
+            continue;
+        }
+
+        // Ajouter le fichier au tableau
+        files = realloc(files, (files_len + 1) * sizeof(char *));
+        files[files_len++] = strdup(file_path);
+
+        // Compteur de fichiers traités
+        file_count++;
       }
-
-      // Limiter le nombre de fichiers si max_files est défini
-      if (loop->max_files > 0 && file_count >= loop->max_files)
+      closedir(cur_dir);
+      if (stack == NULL)
         break;
+    }
+    free_stack(stack);
 
-      // Ajouter une variable d'environnement temporaire pour la variable du `for
-      setenv(loop->variable, file_path, 1);
+    // Null-terminer le tableau
+    files = realloc(files, (files_len + 1) * sizeof(char *));
+    files[files_len] = NULL;
 
-      // Exécuter le bloc de commandes avec la variable remplacée
+    // Il faut maintenant exécuter les commandes pour chaque fichier
+    for (int i = 0; files[i] != NULL; i++)
+    {
+      // Définir la variable d'environnement
+      setenv(loop->variable, files[i], 1);
+
+      // Exécuter les commandes
       execute_ast(loop->block, last_return_value);
 
-      // Compteur de fichiers traités
-      file_count++;
+      // Vérifier le code de retour
+      if (*last_return_value != 0)
+        break;
     }
+
+    // Libérer la mémoire allouée pour les fichiers
+    for (int i = 0; files[i] != NULL; i++)
+    {
+      free(files[i]);
+    }
+    free(files);
 
     free(loop->dir);
     loop->dir = NULL;
@@ -666,7 +799,6 @@ void execute_ast(ast_node *node, int *last_return_value)
 
     // Supprimer la variable d'environnement temporaire
     unsetenv(loop->variable);
-    closedir(dir);
   }
 
   if (node->type == NODE_COMMAND)
