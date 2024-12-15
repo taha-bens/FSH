@@ -299,17 +299,25 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
 
   while (tokens[*index] != NULL)
   {
+    if (strcmp(tokens[*index], "{") == 0)
+    {
+      // Impossible car elle sont traitées par le for
+      fprintf(stderr, "Unexpected opening bracket\n");
+      return NULL;
+    }
+
     if (strcmp(tokens[*index], "}") == 0)
     {
+      // Ignorer les fermetures de blocs
       (*index)++;
-      // On a fini le bloc for il faut quitter la récursion
-      break;
     }
+
     else if (strcmp(tokens[*index], ";") == 0)
     {
       (*index)++;
       break;
     }
+
     else if (strcmp(tokens[*index], "for") == 0)
     {
       // Vérifier la syntaxe le premier argument est nécessairement le nom de la variable
@@ -378,11 +386,32 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         free(variable);
         return NULL;
       }
+      int end = *index + 1;
+      int bracket_count = 1;
+      while (bracket_count != 0)
+      {
+        if (tokens[end] == NULL)
+        {
+          fprintf(stderr, "for: Invalid syntax\n");
+          free(variable);
+          return NULL;
+        }
+        if (strcmp(tokens[end], "{") == 0)
+        {
+          bracket_count++;
+        }
+        if (strcmp(tokens[end], "}") == 0)
+        {
+          bracket_count--;
+        }
+        end++;
+      }
       (*index)++;
+      // Créer la première commande dans le for
       ast_node *block = construct_ast_recursive(tokens, index);
       (*index)--;
-      // Si il y a un point virgule c'est qu'il y a une autre commande après le bloc et on continue la récursion
-      while (tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
+      while (*index < end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
       {
         (*index)++;
         ast_node *child = construct_ast_recursive(tokens, index);
@@ -397,15 +426,6 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           free(variable);
           return NULL;
         }
-      }
-
-      if (tokens[*index] == NULL || strcmp(tokens[*index], "}") != 0)
-      {
-        fprintf(stderr, "No closing bracket\n");
-        fprintf(stderr, "for: Invalid syntax\n");
-        free_ast_node(block);
-        free(variable);
-        return NULL;
       }
       node = create_for_node(dir, variable, options, show_all, recursive, ext, type, max_files, block);
       free(variable);
