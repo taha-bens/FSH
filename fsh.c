@@ -294,10 +294,10 @@ void free_redirection(redirection *red)
   free(red);
 }
 
-// Ajouter une pile pour gérer les dossiers à traiter
+// Pile pour gérer les dossiers à traiter
 typedef struct stack_dir
 {
-  DIR *dir;
+  char *path;
   struct stack_dir *next;
 } stack_dir;
 
@@ -309,12 +309,12 @@ stack_dir *create_stack()
     perror("malloc");
     return NULL;
   }
-  stack->dir = NULL;
+  stack->path = NULL;
   stack->next = NULL;
-  return stack; 
+  return stack;
 }
 
-stack_dir *push(stack_dir *stack, DIR *dir)
+stack_dir *push(stack_dir *stack, char *path)
 {
   stack_dir *new_node = malloc(sizeof(stack_dir));
   if (new_node == NULL)
@@ -322,30 +322,33 @@ stack_dir *push(stack_dir *stack, DIR *dir)
     perror("malloc");
     return NULL;
   }
-  new_node->dir = dir;
+  new_node->path = path;
   new_node->next = stack;
   return new_node;
-}
-
-stack_dir *pop(stack_dir *stack)
-{
-  if (stack == NULL)
-  {
-    return NULL;
-  }
-  stack_dir *temp = stack;
-  stack = stack->next;
-  closedir(temp->dir);
-  free(temp);
-  return stack;
 }
 
 void free_stack(stack_dir *stack)
 {
   while (stack != NULL)
   {
-    stack = pop(stack);
+    stack_dir *temp = stack;
+    stack = stack->next;
+    free(temp->path);
+    free(temp);
   }
+}
+
+char *pop(stack_dir **stack)
+{
+  if (*stack == NULL)
+  {
+    return NULL;
+  }
+  stack_dir *temp = *stack;
+  *stack = (*stack)->next;
+  char *path = temp->path;
+  free(temp);
+  return path;
 }
 
 // Fonction récursive pour construire l'AST
@@ -672,6 +675,7 @@ void execute_ast(ast_node *node, int *last_return_value)
       free(original_dir);
       return;
     }
+    closedir(dir);
     struct dirent *entry;
     int file_count = 0;
 
@@ -692,22 +696,29 @@ void execute_ast(ast_node *node, int *last_return_value)
       return;
     }
     int files_len = 0;
-    stack_dir *stack = create_stack();
-    stack = push(stack, dir);
-    DIR *cur_dir = NULL;
+    stack_dir *stack = NULL;
+    stack = push(stack, strdup(loop->dir));
+    char *cur_path = NULL;
 
-    while (1)
+    while ((cur_path = pop(&stack)) != NULL)
     {
-      cur_dir = pop(stack)->dir;
+      DIR *cur_dir = opendir(cur_path);
+      free(cur_path);
+      if (cur_dir == NULL)
+      {
+        perror("opendir");
+        break;
+      }
       while ((entry = readdir(cur_dir)) != NULL)
       {
         // Si il y a un dossier et qu'on est en mode récursif on ajoute le dossier à la pile
         struct stat entry_stat;
         char entry_path[PATH_MAX];
         snprintf(entry_path, PATH_MAX, "%s/%s", loop->dir, entry->d_name);
+
         if (loop->recursive && stat(entry_path, &entry_stat) == 0 && S_ISDIR(entry_stat.st_mode))
         {
-          stack = push(stack, opendir(entry->d_name));
+          stack = push(stack, strdup(entry_path));
         }
 
         // Ignorer . et ..
@@ -746,7 +757,7 @@ void execute_ast(ast_node *node, int *last_return_value)
         if (loop->ext)
         {
           char *file_ext = strrchr(entry->d_name, '.');
-          if (file_ext == NULL || strcmp(file_ext, loop->ext) != 0)
+          if (file_ext == NULL || strcmp(file_ext + 1, loop->ext) != 0)
             continue;
         }
 
@@ -758,8 +769,6 @@ void execute_ast(ast_node *node, int *last_return_value)
         file_count++;
       }
       closedir(cur_dir);
-      if (stack == NULL)
-        break;
     }
     free_stack(stack);
 
