@@ -326,12 +326,15 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         write(STDERR_FILENO, "for: Invalid syntax\n", 21);
         return NULL;
       }
-      // Aller chercher le nom de la variable et le répertoire qui suit
-      char *variable = malloc(strlen(tokens[*index + 1]) + 2);
-      strcpy(variable, tokens[*index + 1]);
       (*index)++;
-      (*index)++; // On saute le in
-      char *dir = tokens[(*index + 1)];
+      // Aller chercher le nom de la variable et le répertoire qui suit
+      char *variable = malloc(strlen(tokens[*index]) + 2);
+      strcpy(variable, tokens[*index]);
+      (*index)++; // In
+      (*index)++; // Le nom du répertoire
+      char *dir = tokens[(*index)];
+      
+      (*index)++;
 
       // Initialiser les options
       int show_all = 0;
@@ -343,7 +346,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       int options_len = 0;
 
       // Traiter les options
-      while (tokens[*index] && tokens[*index][0] == '-')
+      while (tokens[*index] && tokens[*index][0] != '{' && tokens[*index][0] == '-')
       {
         if (strcmp(tokens[*index], "-A") == 0)
         {
@@ -370,15 +373,17 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         (*index)++;
       }
 
+      // Null-terminer le tableau d'options
+      options = realloc(options, (options_len + 1) * sizeof(char *));
+      options[options_len] = NULL;
+
       // On a fini de traiter les options si les options sont vides on les libère
       if (options_len == 0)
       {
         free(options);
         options = NULL;
-        ++(*index);
       }
 
-      (*index)++;
       // Une fois les options traitées, vérifier qu'il existe un bloc entre accolades
       if (tokens[*index] == NULL || strcmp(tokens[*index], "{") != 0)
       {
@@ -404,7 +409,10 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         {
           bracket_count--;
         }
-        end++;
+        if (bracket_count != 0)
+        {
+          end++;
+        }
       }
       (*index)++;
       // Créer la première commande dans le for
