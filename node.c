@@ -156,7 +156,6 @@ void free_command(command *cmd)
     free(cmd->args[i]);
   }
   free(cmd->args);
-  free(cmd);
 }
 
 void free_pipeline(pipeline *pipe)

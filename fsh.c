@@ -246,12 +246,14 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, ">: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
           if (access(tokens[*index], F_OK) == 0)
           {
             fprintf(stderr, "pipeline_run: File exists\n");
+            free_ast_node(node);
             return NULL;
           }
           // Créer le nœud de redirection
@@ -264,6 +266,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, ">>: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
@@ -277,6 +280,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, "<: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
@@ -290,16 +294,19 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, "2>: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
           if (access(tokens[*index], F_OK) == 0)
           {
             fprintf(stderr, "pipeline_run: File exists\n");
+            free_ast_node(node);
             return NULL;
           }
           // Créer le nœud de redirection
           redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
+          (*index)++;
         }
         else if (strcmp(tokens[*index], "2>>") == 0)
         {
@@ -307,11 +314,13 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, "2>>: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
           // Créer le nœud de redirection
           redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_APPEND);
+          (*index)++;
         }
         else if (strcmp(tokens[*index], "2>|") == 0)
         {
@@ -319,6 +328,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, "2>|: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
@@ -332,6 +342,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[*index + 1] == NULL)
           {
             fprintf(stderr, ">|: Invalid syntax\n");
+            free_ast_node(node);
             return NULL;
           }
           (*index)++;
@@ -731,14 +742,16 @@ void execute_command(ast_node *node, int *last_return_value)
   int saved_stdout = dup(STDOUT_FILENO);
   int saved_stderr = dup(STDERR_FILENO);
 
-  // Appliquer si elle existe la redirection en regardant dans les enfants
-  for (int i = 0; i < node->child_count; i++)
+  int i = 0;
+
+  // Appliquer si elle existe plusieurs redirections sur la commande
+  while (i < node->child_count)
   {
     if (node->children[i]->type == NODE_REDIRECTION)
     {
       redirection *redir = &node->children[i]->data.redir;
       // Appliquer la redirection
-      int fd = open(redir->file, redir->mode, 0644);
+      int fd = open(redir->file, redir->mode, 0664);
       if (fd == -1)
       {
         perror("open");
@@ -777,6 +790,7 @@ void execute_command(ast_node *node, int *last_return_value)
 
       close(fd);
     }
+    i++;
   }
 
   if (strcmp(cmd->args[0], "exit") == 0)
@@ -1017,7 +1031,7 @@ int main()
     free(cleaned_line);
     if (root == NULL)
     {
-      last_return_value = 2;
+      last_return_value = 1;
       free(line);
       continue;
     }
