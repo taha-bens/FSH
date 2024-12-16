@@ -21,7 +21,6 @@
 #include "headers/pwd.h"
 #include "headers/ftype.h"
 #include "headers/cd.h"
-#include "headers/for.h"
 
 #define RESET_COLOR "\033[00m"
 #define RED_COLOR "\033[91m"
