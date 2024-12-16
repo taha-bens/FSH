@@ -28,6 +28,7 @@
 #define SIZE_PWDBUF 1024
 #define PATH_MAX 4096
 
+void execute_ast(ast_node *node, int *last_return_value);
 void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value);
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
 int handle_redirections(char **splited, int *last_return_value);
@@ -35,8 +36,9 @@ void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void cleanup_and_exit(int last_return_value, ast_node *tree);
 
 // Fonction pour renvoyer si une chaine de caractères marque la fin d'une commande
-int is_special_char(char *c) {
-  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 ||   strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{" ) == 0 || strcmp(c, "}") == 0;
+int is_special_char(char *c)
+{
+  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{") == 0 || strcmp(c, "}") == 0;
 }
 
 // Fonction récursive pour construire l'AST
@@ -269,20 +271,240 @@ ast_node *construct_ast(char *line)
   return root;
 }
 
-void execute_ast(ast_node *node, int *last_return_value)
+void execute_for(ast_node *node, int *last_return_value)
 {
-  if (node == NULL)
+  for_loop *loop = &node->data.for_loop;
+  // Vérifier que dir est une variable cad qu'elle contient un $ ds cas essayer de substituer la variable
+  char *dollar_pos = strchr(loop->dir, '$');
+  char *original_dir = strdup(loop->dir);
+  if (dollar_pos != NULL)
   {
+    // On a un $ on doit faire une substitution
+    // Les variables ne sont qu'une lettre
+    char *var_name = malloc(2);
+    strncpy(var_name, dollar_pos + 1, 1);
+    var_name[1] = '\0';
+    char *var_value = getenv(var_name);
+    if (var_value == NULL)
+    {
+      fprintf(stderr, "Variable %s not set\n", var_name);
+      *last_return_value = 1;
+      free(var_name);
+      return;
+    }
+    // On a la valeur de la variable on peut la remplacer
+    size_t expanded_len = strlen(loop->dir) + strlen(var_value) - 1;
+    char *expanded = malloc(expanded_len + 1);
+    if (expanded == NULL)
+    {
+      perror("malloc");
+      *last_return_value = 1;
+      free(var_name);
+      return;
+    }
+    char *suffix = dollar_pos + 1;
+    strncpy(expanded, loop->dir, dollar_pos - loop->dir);
+    expanded[dollar_pos - loop->dir] = '\0';
+    strcat(expanded, var_value);
+    strcat(expanded, suffix + 1);
+    free(loop->dir);
+    loop->dir = expanded;
+    free(var_name);
+  }
+  struct stat path_stat;
+  if (stat(loop->dir, &path_stat) == -1)
+  {
+    fprintf(stderr, "command_for_run: %s\n", loop->dir);
+    perror("command_for_run");
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
+    *last_return_value = 1;
     return;
   }
 
-  if (node->type == NODE_FOR_LOOP)
+  if (!S_ISDIR(path_stat.st_mode))
   {
-    for_loop *loop = &node->data.for_loop;
-    // Vérifier que dir est une variable cad qu'elle contient un $ ds cas essayer de substituer la variable
-    char *dollar_pos = strchr(loop->dir, '$');
-    char *original_dir = strdup(loop->dir);
-    if (dollar_pos != NULL)
+    fprintf(stderr, "command_for_run: Not a directory\n");
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
+    *last_return_value = 1;
+    return;
+  }
+
+  DIR *dir = opendir(loop->dir);
+  if (dir == NULL)
+  {
+    perror("command_for_run");
+    *last_return_value = 1;
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
+    return;
+  }
+  closedir(dir);
+  struct dirent *entry;
+  int file_count = 0;
+
+  // Obtenir la liste correcte des fichiers en les stockant dans un tableau
+  char **files = malloc(1 * sizeof(char *));
+  if (files == NULL)
+  {
+    perror("malloc");
+    *last_return_value = 1;
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
+    return;
+  }
+  int files_len = 0;
+  stack_dir *stack = NULL;
+  stack = push(stack, strdup(loop->dir));
+  char *cur_path = NULL;
+
+  while ((cur_path = pop(&stack)) != NULL)
+  {
+    DIR *cur_dir = opendir(cur_path);
+    if (cur_dir == NULL)
+    {
+      perror("opendir");
+      free(cur_path);
+      break;
+    }
+    while ((entry = readdir(cur_dir)) != NULL)
+    {
+
+      // Ignorer . et ..
+      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+        continue;
+
+      // Ignorer les fichiers cachés si show_all n'est pas activé
+      if (entry->d_name[0] == '.' && !loop->show_all) // Fichier caché
+        continue;
+
+      // Créer le chemin complet du fichier
+      char file_path[PATH_MAX];
+      snprintf(file_path, PATH_MAX, "%s/%s", cur_path, entry->d_name);
+
+      // Vérification des options (extension, type, etc.)
+      struct stat file_stat;
+      if (stat(file_path, &file_stat) == -1)
+      {
+        perror("stat");
+        continue;
+      }
+
+      if (loop->recursive && stat(file_path, &file_stat) == 0 && S_ISDIR(file_stat.st_mode))
+      {
+        stack = push(stack, strdup(file_path));
+      }
+
+      // Filtrer les fichiers par type
+      if (loop->type)
+      {
+        if ((strcmp(loop->type, "f") == 0 && !S_ISREG(file_stat.st_mode)) ||
+            (strcmp(loop->type, "d") == 0 && !S_ISDIR(file_stat.st_mode)))
+          continue;
+      }
+
+      // Limiter le nombre de fichiers si max_files est défini
+      if (loop->max_files > 0 && file_count >= loop->max_files)
+        break;
+
+      // Filtrer les fichiers par extension
+      if (loop->ext)
+      {
+        char *file_ext = strrchr(entry->d_name, '.');
+        if (file_ext == NULL || strcmp(file_ext, loop->ext) != 0)
+          continue;
+        // On a trouvé un fichier qui correspond à l'extension recherchée on supprime toute la chaine
+        // pour ne garder que le nom du fichier on change donc file_path
+        char *file_name = malloc(strlen(entry->d_name) + 1);
+        strcpy(file_name, entry->d_name);
+        file_name[strlen(entry->d_name) - strlen(file_ext)] = '\0';
+        snprintf(file_path, PATH_MAX, "%s/%s", cur_path, file_name);
+        free(file_name);
+      }
+
+      // Ajouter le fichier au tableau
+      files = realloc(files, (files_len + 1) * sizeof(char *));
+      files[files_len++] = strdup(file_path);
+
+      // Compteur de fichiers traités
+      file_count++;
+    }
+    closedir(cur_dir);
+    free(cur_path);
+  }
+  free_stack(stack);
+
+  // Null-terminer le tableau
+  files = realloc(files, (files_len + 1) * sizeof(char *));
+  files[files_len] = NULL;
+
+  // Il faut maintenant exécuter les commandes pour chaque fichier
+  for (int i = 0; files[i] != NULL; i++)
+  {
+    // Définir la variable d'environnement
+    setenv(loop->variable, files[i], 1);
+
+    // Exécuter les commandes
+    execute_ast(loop->block, last_return_value);
+
+    // Vérifier le code de retour
+    if (*last_return_value != 0)
+      break;
+  }
+
+  // Libérer la mémoire allouée pour les fichiers
+  for (int i = 0; files[i] != NULL; i++)
+  {
+    free(files[i]);
+  }
+  free(files);
+
+  free(loop->dir);
+  loop->dir = NULL;
+
+  // Restaurer dir à sa valeur d'origine
+  loop->dir = strdup(original_dir);
+
+  // Libérer la mémoire allouée pour le chemin du répertoire
+  free(original_dir);
+
+  // Supprimer la variable d'environnement temporaire
+  unsetenv(loop->variable);
+}
+
+void handle_substitution(command *cmd, char **copy_args, int *last_return_value)
+{
+  // Regarder dans args si on a pas une substitution de variable à faire
+  for (int i = 0; i < cmd->argc; i++)
+  {
+    // Regarder chaque chaines de caractères pour voir si on a un $
+    char *dollar_pos = strchr(cmd->args[i], '$');
+    while (dollar_pos != NULL)
     {
       // On a un $ on doit faire une substitution
       // Les variables ne sont qu'une lettre
@@ -294,11 +516,21 @@ void execute_ast(ast_node *node, int *last_return_value)
       {
         fprintf(stderr, "Variable %s not set\n", var_name);
         *last_return_value = 1;
+        for (int j = 0; j < cmd->argc; j++)
+        {
+          free(cmd->args[j]);
+          cmd->args[j] = strdup(copy_args[j]);
+        }
+        for (int j = 0; j < cmd->argc; j++)
+        {
+          free(copy_args[j]);
+        }
+        free(copy_args);
         free(var_name);
         return;
       }
       // On a la valeur de la variable on peut la remplacer
-      size_t expanded_len = strlen(loop->dir) + strlen(var_value) - 1;
+      size_t expanded_len = strlen(cmd->args[i]) + strlen(var_value) - 1;
       char *expanded = malloc(expanded_len + 1);
       if (expanded == NULL)
       {
@@ -308,433 +540,217 @@ void execute_ast(ast_node *node, int *last_return_value)
         return;
       }
       char *suffix = dollar_pos + 1;
-      strncpy(expanded, loop->dir, dollar_pos - loop->dir);
-      expanded[dollar_pos - loop->dir] = '\0';
+      strncpy(expanded, cmd->args[i], dollar_pos - cmd->args[i]);
+      expanded[dollar_pos - cmd->args[i]] = '\0';
       strcat(expanded, var_value);
       strcat(expanded, suffix + 1);
-      free(loop->dir);
-      loop->dir = expanded;
+      free(cmd->args[i]);
+      cmd->args[i] = expanded;
       free(var_name);
+
+      // Rechercher la prochaine occurrence de $
+      dollar_pos = strchr(cmd->args[i], '$');
     }
-    struct stat path_stat;
-    if (stat(loop->dir, &path_stat) == -1)
+  }
+}
+
+void execute_command(ast_node *node, int *last_return_value)
+{
+  command *cmd = &node->data.cmd;
+  // Faire une copie des arguments pour pouvoir les modifier
+  char **copy_args = malloc((cmd->argc + 1) * sizeof(char *));
+  for (int i = 0; i < cmd->argc; i++)
+  {
+    copy_args[i] = strdup(cmd->args[i]);
+  }
+  copy_args[cmd->argc] = NULL;
+
+  handle_substitution(cmd, copy_args, last_return_value);
+
+  if (strcmp(cmd->args[0], "exit") == 0)
+  {
+    // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
+    if (cmd->argc > 2)
     {
-      fprintf(stderr, "command_for_run: %s\n", loop->dir);
-      perror("command_for_run");
-      free(loop->dir);
-      loop->dir = NULL;
-
-      // Restaurer dir à sa valeur d'origine
-      loop->dir = strdup(original_dir);
-
-      // Libérer la mémoire allouée pour le chemin du répertoire
-      free(original_dir);
+      fprintf(stderr, "exit: too many arguments\n");
       *last_return_value = 1;
-      return;
-    }
-
-    if (!S_ISDIR(path_stat.st_mode))
-    {
-      fprintf(stderr, "command_for_run: Not a directory\n");
-      free(loop->dir);
-      loop->dir = NULL;
-
-      // Restaurer dir à sa valeur d'origine
-      loop->dir = strdup(original_dir);
-
-      // Libérer la mémoire allouée pour le chemin du répertoire
-      free(original_dir);
-      *last_return_value = 1;
-      return;
-    }
-
-    DIR *dir = opendir(loop->dir);
-    if (dir == NULL)
-    {
-      perror("command_for_run");
-      *last_return_value = 1;
-      free(loop->dir);
-      loop->dir = NULL;
-
-      // Restaurer dir à sa valeur d'origine
-      loop->dir = strdup(original_dir);
-
-      // Libérer la mémoire allouée pour le chemin du répertoire
-      free(original_dir);
-      return;
-    }
-    closedir(dir);
-    struct dirent *entry;
-    int file_count = 0;
-
-    // Obtenir la liste correcte des fichiers en les stockant dans un tableau
-    char **files = malloc(1 * sizeof(char *));
-    if (files == NULL)
-    {
-      perror("malloc");
-      *last_return_value = 1;
-      free(loop->dir);
-      loop->dir = NULL;
-
-      // Restaurer dir à sa valeur d'origine
-      loop->dir = strdup(original_dir);
-
-      // Libérer la mémoire allouée pour le chemin du répertoire
-      free(original_dir);
-      return;
-    }
-    int files_len = 0;
-    stack_dir *stack = NULL;
-    stack = push(stack, strdup(loop->dir));
-    char *cur_path = NULL;
-
-    while ((cur_path = pop(&stack)) != NULL)
-    {
-      DIR *cur_dir = opendir(cur_path);
-      if (cur_dir == NULL)
+      // Retablir les arguments originaux
+      for (int i = 0; i < cmd->argc; i++)
       {
-        perror("opendir");
-        free(cur_path);
-        break;
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
       }
-      while ((entry = readdir(cur_dir)) != NULL)
+      for (int i = 0; i < cmd->argc; i++)
       {
-
-        // Ignorer . et ..
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-          continue;
-
-        // Ignorer les fichiers cachés si show_all n'est pas activé
-        if (entry->d_name[0] == '.' && !loop->show_all) // Fichier caché
-          continue;
-
-        // Créer le chemin complet du fichier
-        char file_path[PATH_MAX];
-        snprintf(file_path, PATH_MAX, "%s/%s", cur_path, entry->d_name);
-
-        // Vérification des options (extension, type, etc.)
-        struct stat file_stat;
-        if (stat(file_path, &file_stat) == -1)
-        {
-          perror("stat");
-          continue;
-        }
-
-        if (loop->recursive && stat(file_path, &file_stat) == 0 && S_ISDIR(file_stat.st_mode))
-        {
-          stack = push(stack, strdup(file_path));
-        }
-
-        // Filtrer les fichiers par type
-        if (loop->type)
-        {
-          if ((strcmp(loop->type, "f") == 0 && !S_ISREG(file_stat.st_mode)) ||
-              (strcmp(loop->type, "d") == 0 && !S_ISDIR(file_stat.st_mode)))
-            continue;
-        }
-
-        // Limiter le nombre de fichiers si max_files est défini
-        if (loop->max_files > 0 && file_count >= loop->max_files)
-          break;
-
-        // Filtrer les fichiers par extension
-        if (loop->ext)
-        {
-          char *file_ext = strrchr(entry->d_name, '.');
-          if (file_ext == NULL || strcmp(file_ext, loop->ext) != 0)
-            continue;
-          // On a trouvé un fichier qui correspond à l'extension recherchée on supprime toute la chaine
-          // pour ne garder que le nom du fichier on change donc file_path
-          char *file_name = malloc(strlen(entry->d_name) + 1);
-          strcpy(file_name, entry->d_name);
-          file_name[strlen(entry->d_name) - strlen(file_ext)] = '\0';
-          snprintf(file_path, PATH_MAX, "%s/%s", cur_path, file_name);
-          free(file_name);
-        }
-
-        // Ajouter le fichier au tableau
-        files = realloc(files, (files_len + 1) * sizeof(char *));
-        files[files_len++] = strdup(file_path);
-
-        // Compteur de fichiers traités
-        file_count++;
+        free(copy_args[i]);
       }
-      closedir(cur_dir);
-      free(cur_path);
+      free(copy_args);
+      return;
     }
-    free_stack(stack);
-
-    // Null-terminer le tableau
-    files = realloc(files, (files_len + 1) * sizeof(char *));
-    files[files_len] = NULL;
-
-    // Il faut maintenant exécuter les commandes pour chaque fichier
-    for (int i = 0; files[i] != NULL; i++)
+    // Si on a un argument, c'est la valeur de retour
+    if (cmd->argc == 2)
     {
-      // Définir la variable d'environnement
-      setenv(loop->variable, files[i], 1);
-
-      // Exécuter les commandes
-      execute_ast(loop->block, last_return_value);
-
-      // Vérifier le code de retour
-      if (*last_return_value != 0)
-        break;
+      int code = atoi(cmd->args[1]);
+      if (code > 255)
+      {
+        code %= 256; // Normaliser dans la plage [0, 255]
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
+      cleanup_and_exit(code, node);
     }
-
-    // Libérer la mémoire allouée pour les fichiers
-    for (int i = 0; files[i] != NULL; i++)
+    for (int i = 0; i < cmd->argc; i++)
     {
-      free(files[i]);
+      free(cmd->args[i]);
+      cmd->args[i] = strdup(copy_args[i]);
     }
-    free(files);
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(copy_args[i]);
+    }
+    free(copy_args);
+    cleanup_and_exit(*last_return_value, node);
+  }
+  else if (strcmp(cmd->args[0], "pwd") == 0)
+  {
+    if (cmd->argc != 1)
+    {
+      fprintf(stderr, "pwd: too many arguments\n");
+      *last_return_value = 1;
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
+      return;
+    }
+    *last_return_value = pwd();
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(cmd->args[i]);
+      cmd->args[i] = strdup(copy_args[i]);
+    }
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(copy_args[i]);
+    }
+    free(copy_args);
+  }
+  else if (strcmp(cmd->args[0], "cd") == 0)
+  {
+    if (cmd->argc > 2)
+    {
+      fprintf(stderr, "cd: invalid number of arguments\n");
+      *last_return_value = 1;
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(cmd->args[i]);
+        cmd->args[i] = strdup(copy_args[i]);
+      }
+      for (int i = 0; i < cmd->argc; i++)
+      {
+        free(copy_args[i]);
+      }
+      free(copy_args);
+      return;
+    }
+    *last_return_value = execute_cd(cmd->args[1]);
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(cmd->args[i]);
+      cmd->args[i] = strdup(copy_args[i]);
+    }
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(copy_args[i]);
+    }
+    free(copy_args);
+  }
+  else if (strcmp(cmd->args[0], "ftype") == 0)
+  {
+    *last_return_value = ftype(cmd->args[1], ".");
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(cmd->args[i]);
+      cmd->args[i] = strdup(copy_args[i]);
+    }
+    for (int i = 0; i < cmd->argc; i++)
+    {
+      free(copy_args[i]);
+    }
+    free(copy_args);
+  }
+  else
+  {
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+      execvp(cmd->args[0], cmd->args);
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid < 0)
+    {
+      perror("fork");
+    }
+    else
+    {
+      int status;
+      waitpid(pid, &status, 0);
+      if (WIFEXITED(status))
+      {
+        *last_return_value = WEXITSTATUS(status);
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
+        if (*last_return_value > 255)
+        {
+          *last_return_value %= 256; // Normaliser dans la plage [0, 255]
+        }
+      }
+      else
+      {
+        *last_return_value = 1; // Erreur par défaut
+      }
+    }
+  }
+}
 
-    free(loop->dir);
-    loop->dir = NULL;
+void execute_ast(ast_node *node, int *last_return_value)
+{
+  if (node == NULL)
+  {
+    return;
+  }
 
-    // Restaurer dir à sa valeur d'origine
-    loop->dir = strdup(original_dir);
-
-    // Libérer la mémoire allouée pour le chemin du répertoire
-    free(original_dir);
-
-    // Supprimer la variable d'environnement temporaire
-    unsetenv(loop->variable);
+  if (node->type == NODE_FOR_LOOP)
+  {
+    execute_for(node, last_return_value);
   }
 
   if (node->type == NODE_COMMAND)
   {
-    // Exécuter la commande
-    command *cmd = &node->data.cmd;
-
-    // Faire une copie des arguments pour pouvoir les modifier
-    char **copy_args = malloc((cmd->argc + 1) * sizeof(char *));
-    for (int i = 0; i < cmd->argc; i++)
-    {
-      copy_args[i] = strdup(cmd->args[i]);
-    }
-    copy_args[cmd->argc] = NULL;
-
-    // Regarder dans args si on a pas une substitution de variable à faire
-    for (int i = 0; i < cmd->argc; i++)
-    {
-      // Regarder chaque chaines de caractères pour voir si on a un $
-      char *dollar_pos = strchr(cmd->args[i], '$');
-      while (dollar_pos != NULL)
-      {
-        // On a un $ on doit faire une substitution
-        // Les variables ne sont qu'une lettre
-        char *var_name = malloc(2);
-        strncpy(var_name, dollar_pos + 1, 1);
-        var_name[1] = '\0';
-        char *var_value = getenv(var_name);
-        if (var_value == NULL)
-        {
-          fprintf(stderr, "Variable %s not set\n", var_name);
-          *last_return_value = 1;
-          for (int j = 0; j < cmd->argc; j++)
-          {
-            free(cmd->args[j]);
-            cmd->args[j] = strdup(copy_args[j]);
-          }
-          for (int j = 0; j < cmd->argc; j++)
-          {
-            free(copy_args[j]);
-          }
-          free(copy_args);
-          free(var_name);
-          return;
-        }
-        // On a la valeur de la variable on peut la remplacer
-        size_t expanded_len = strlen(cmd->args[i]) + strlen(var_value) - 1;
-        char *expanded = malloc(expanded_len + 1);
-        if (expanded == NULL)
-        {
-          perror("malloc");
-          *last_return_value = 1;
-          free(var_name);
-          return;
-        }
-        char *suffix = dollar_pos + 1;
-        strncpy(expanded, cmd->args[i], dollar_pos - cmd->args[i]);
-        expanded[dollar_pos - cmd->args[i]] = '\0';
-        strcat(expanded, var_value);
-        strcat(expanded, suffix + 1);
-        free(cmd->args[i]);
-        cmd->args[i] = expanded;
-        free(var_name);
-
-        // Rechercher la prochaine occurrence de $
-        dollar_pos = strchr(cmd->args[i], '$');
-      }
-    }
-    if (strcmp(cmd->args[0], "exit") == 0)
-    {
-      // Vérifier que l'on a déjà pas un argument en trop (on accepte pas plus d'un argument)
-      if (cmd->argc > 2)
-      {
-        fprintf(stderr, "exit: too many arguments\n");
-        *last_return_value = 1;
-        // Retablir les arguments originaux
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(copy_args[i]);
-        }
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(copy_args[i]);
-        }
-        free(copy_args);
-        return;
-      }
-      // Si on a un argument, c'est la valeur de retour
-      if (cmd->argc == 2)
-      {
-        int code = atoi(cmd->args[1]);
-        if (code > 255)
-        {
-          code %= 256; // Normaliser dans la plage [0, 255]
-        }
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(copy_args[i]);
-        }
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(copy_args[i]);
-        }
-        free(copy_args);
-        cleanup_and_exit(code, node);
-      }
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(cmd->args[i]);
-        cmd->args[i] = strdup(copy_args[i]);
-      }
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(copy_args[i]);
-      }
-      free(copy_args);
-      cleanup_and_exit(*last_return_value, node);
-    }
-    else if (strcmp(cmd->args[0], "pwd") == 0)
-    {
-      if (cmd->argc != 1)
-      {
-        fprintf(stderr, "pwd: too many arguments\n");
-        *last_return_value = 1;
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(copy_args[i]);
-        }
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(copy_args[i]);
-        }
-        free(copy_args);
-        return;
-      }
-      *last_return_value = pwd();
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(cmd->args[i]);
-        cmd->args[i] = strdup(copy_args[i]);
-      }
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(copy_args[i]);
-      }
-      free(copy_args);
-    }
-    else if (strcmp(cmd->args[0], "cd") == 0)
-    {
-      if (cmd->argc > 2)
-      {
-        fprintf(stderr, "cd: invalid number of arguments\n");
-        *last_return_value = 1;
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(copy_args[i]);
-        }
-        for (int i = 0; i < cmd->argc; i++)
-        {
-          free(copy_args[i]);
-        }
-        free(copy_args);
-        return;
-      }
-      *last_return_value = execute_cd(cmd->args[1]);
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(cmd->args[i]);
-        cmd->args[i] = strdup(copy_args[i]);
-      }
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(copy_args[i]);
-      }
-      free(copy_args);
-    }
-    else if (strcmp(cmd->args[0], "ftype") == 0)
-    {
-      *last_return_value = ftype(cmd->args[1], ".");
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(cmd->args[i]);
-        cmd->args[i] = strdup(copy_args[i]);
-      }
-      for (int i = 0; i < cmd->argc; i++)
-      {
-        free(copy_args[i]);
-      }
-      free(copy_args);
-    }
-    else
-    {
-      pid_t pid = fork();
-      if (pid == 0)
-      {
-        execvp(cmd->args[0], cmd->args);
-        perror("execvp");
-        exit(EXIT_FAILURE);
-      }
-      else if (pid < 0)
-      {
-        perror("fork");
-      }
-      else
-      {
-        int status;
-        waitpid(pid, &status, 0);
-        if (WIFEXITED(status))
-        {
-          *last_return_value = WEXITSTATUS(status);
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(cmd->args[i]);
-            cmd->args[i] = strdup(copy_args[i]);
-          }
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(copy_args[i]);
-          }
-          free(copy_args);
-          if (*last_return_value > 255)
-          {
-            *last_return_value %= 256; // Normaliser dans la plage [0, 255]
-          }
-        }
-        else
-        {
-          *last_return_value = 1; // Erreur par défaut
-        }
-      }
-    }
+    execute_command(node, last_return_value);
   }
 
   for (int i = 0; i < node->child_count; i++)
