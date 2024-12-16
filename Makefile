@@ -2,10 +2,10 @@
 
 # Compiler and flags
 CC ?= gcc
-CCFLAGS ?= -Wall -fsanitize=address
+CCFLAGS ?= -Wall #-fsanitize=address #A désactiver pour les tests valgrind mais utile pour debug
 
 # Headers
-HEADERS = pwd.h ftype.h cd.h for.h
+HEADERS = pwd.h ftype.h cd.h for.h node.h stack_dir.h string_util.h
 
 # Shared libraries
 SHLIBS ?= -lreadline 
@@ -14,10 +14,19 @@ SHLIBS ?= -lreadline
 all: fsh
 
 # Rule to build the executable
-fsh: fsh.c pwd.o ftype.o cd.o for.o
+fsh: fsh.c node.o pwd.o ftype.o cd.o for.o stack_dir.o string_util.o
 	$(CC) $(CCFLAGS) -o $@ $^ $(SHLIBS)
 
 # Rule to compile the source file into an object file
+node.o: node.c
+	$(CC) $(CCFLAGS) -c $<
+
+stack_dir.o: stack_dir.c
+	$(CC) $(CCFLAGS) -c $<
+
+string_util.o: string_util.c
+	$(CC) $(CCFLAGS) -c $<
+
 pwd.o: pwd.c
 	$(CC) $(CCFLAGS) -c $< 
 

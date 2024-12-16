@@ -15,6 +15,9 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 
+#include "headers/node.h"
+#include "headers/stack_dir.h"
+#include "headers/string_util.h"
 #include "headers/pwd.h"
 #include "headers/ftype.h"
 #include "headers/cd.h"
@@ -26,329 +29,15 @@
 #define SIZE_PWDBUF 1024
 #define PATH_MAX 4096
 
-typedef struct ast_node ast_node;
-
-char **str_split(char *a_str, const char a_delim);
-void free_split(char **splited);
-char *trim_and_reduce_spaces(const char *str);
 void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value);
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
 int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void cleanup_and_exit(int last_return_value, ast_node *tree);
 
-typedef enum node_type
-{
-  NODE_COMMAND,     // Une commande simple
-  NODE_PIPELINE,    // Un pipeline de commandes
-  NODE_FOR_LOOP,    // Une boucle for avec des commandes
-  NODE_REDIRECTION, // Une redirection de fichier
-  NODE_IF,          // Une condition if
-  NODE_SEQUENCE     // Une séquence de commandes (séparées par des points-virgules)
-} node_type;
-
-typedef struct command
-{
-  char **args;
-  int argc;
-} command;
-
-typedef struct pipeline
-{
-  command **commands;
-  int nb_commands;
-} pipeline;
-
-typedef struct redirection
-{
-  char *file;
-  int fd;
-  int mode;
-} redirection;
-
-typedef struct if_statement
-{
-  char *condition;
-  ast_node *then_block;
-  ast_node *else_block;
-} if_statement;
-
-typedef struct for_loop
-{
-  char *dir;
-  char *variable;
-  char **options;
-  int show_all;
-  int recursive;
-  char *ext;
-  char *type;
-  int max_files;
-  ast_node *block;
-} for_loop;
-typedef struct ast_node
-{
-  node_type type;             // Type du nœud
-  struct ast_node **children; // Enfants (par exemple, commandes d'un pipeline ou boucle)
-  int child_count;            // Nombre d'enfants
-  union
-  {
-    command cmd;
-    pipeline pipe;
-    redirection redir;
-    if_statement if_stmt;
-    for_loop for_loop;
-  } data;
-} ast_node;
-
-// Crée un nœud d'AST
-ast_node *create_ast_node(node_type type, char *value)
-{
-  ast_node *node = malloc(sizeof(ast_node));
-  node->type = type;
-  node->children = NULL;
-  node->child_count = 0;
-  memset(&node->data, 0, sizeof(node->data));
-  return node;
-}
-
-ast_node *create_command_node(char **args, int argc)
-{
-  if (argc == 0 || args == NULL)
-  {
-    return NULL;
-  }
-  ast_node *node = create_ast_node(NODE_COMMAND, args[0]);
-  size_t size = argc * sizeof(char *);
-  node->data.cmd.args = malloc(size + sizeof(char *));
-  for (int i = 0; i < argc; i++)
-  {
-    node->data.cmd.args[i] = strdup(args[i]);
-  }
-  node->data.cmd.args[argc] = NULL;
-  node->data.cmd.argc = argc;
-
-  return node;
-}
-
-ast_node *create_pipeline_node(command **commands, int nb_commands)
-{
-  ast_node *node = create_ast_node(NODE_PIPELINE, "|");
-  node->data.pipe.commands = malloc(nb_commands * sizeof(command *));
-  for (int i = 0; i < nb_commands; i++)
-  {
-    node->data.pipe.commands[i] = commands[i];
-  }
-  node->data.pipe.nb_commands = nb_commands;
-  return node;
-}
-
-ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block)
-{
-  ast_node *node = create_ast_node(NODE_IF, condition);
-  node->data.if_stmt.condition = strdup(condition);
-  node->data.if_stmt.then_block = then_block;
-  node->data.if_stmt.else_block = else_block;
-  return node;
-}
-
-// Ajoute un enfant à un nœud
-void add_child(ast_node *parent, ast_node *child)
-{
-  parent->children = realloc(parent->children, (parent->child_count + 1) * sizeof(ast_node *));
-  parent->children[parent->child_count++] = child;
-}
-
-ast_node *create_for_node(char *dir, char *variable, char **options, int show_all, int recursive, char *ext, char *type, int max_files, ast_node *block)
-{
-  ast_node *node = create_ast_node(NODE_FOR_LOOP, "for");
-  node->data.for_loop.dir = strdup(dir);
-  node->data.for_loop.variable = strdup(variable);
-  node->data.for_loop.options = options;
-  node->data.for_loop.show_all = show_all;
-  node->data.for_loop.recursive = recursive;
-  node->data.for_loop.ext = ext; // Aliasing mais bon on s'en fout
-  node->data.for_loop.type = type ? strdup(type) : NULL;
-  node->data.for_loop.max_files = max_files;
-  node->data.for_loop.block = block;
-  return node;
-}
-
-ast_node *create_redirection_node(char *file, int fd, int mode)
-{
-  ast_node *node = create_ast_node(NODE_REDIRECTION, file);
-  node->data.redir.file = strdup(file);
-  node->data.redir.fd = fd;
-  node->data.redir.mode = mode;
-  return node;
-}
-
-void free_command(command *cmd)
-{
-  for (int i = 0; i < cmd->argc; i++)
-  {
-    free(cmd->args[i]);
-  }
-  free(cmd->args);
-  free(cmd);
-}
-
-void free_pipeline(pipeline *pipe)
-{
-  for (int i = 0; i < pipe->nb_commands; i++)
-  {
-    free_command(pipe->commands[i]);
-  }
-  free(pipe->commands);
-  free(pipe);
-}
-
-// Libère un nœud d'AST
-void free_ast_node(ast_node *node)
-{
-  if (!node)
-    return;
-
-  // Libération des enfants
-  for (int i = 0; i < node->child_count; i++)
-  {
-    free_ast_node(node->children[i]);
-    node->children[i] = NULL;
-  }
-  free(node->children);
-  node->children = NULL;
-
-  // Libération des ressources spécifiques
-  switch (node->type)
-  {
-  case NODE_COMMAND:
-    for (int i = 0; i < node->data.cmd.argc; i++)
-    {
-      free(node->data.cmd.args[i]);
-      node->data.cmd.args[i] = NULL;
-    }
-    free(node->data.cmd.args);
-    node->data.cmd.args = NULL;
-    break;
-  case NODE_REDIRECTION:
-    free(node->data.redir.file);
-    node->data.redir.file = NULL;
-    break;
-  case NODE_FOR_LOOP:
-    free(node->data.for_loop.dir);
-    node->data.for_loop.dir = NULL;
-    free(node->data.for_loop.variable);
-    node->data.for_loop.variable = NULL;
-    for (int i = 0; node->data.for_loop.options && node->data.for_loop.options[i]; i++)
-    {
-      free(node->data.for_loop.options[i]);
-      node->data.for_loop.options[i] = NULL;
-    }
-    free(node->data.for_loop.options);
-    node->data.for_loop.options = NULL;
-    free(node->data.for_loop.ext);
-    node->data.for_loop.ext = NULL;
-    free(node->data.for_loop.type);
-    node->data.for_loop.type = NULL;
-    free_ast_node(node->data.for_loop.block);
-    node->data.for_loop.block = NULL;
-    break;
-  case NODE_IF:
-    free(node->data.if_stmt.condition);
-    node->data.if_stmt.condition = NULL;
-    free_ast_node(node->data.if_stmt.then_block);
-    node->data.if_stmt.then_block = NULL;
-    free_ast_node(node->data.if_stmt.else_block);
-    node->data.if_stmt.else_block = NULL;
-    break;
-  case NODE_PIPELINE:
-    free_pipeline(&node->data.pipe);
-    node->data.pipe.commands = NULL;
-    break;
-  default:
-    break;
-  }
-  free(node);
-  node = NULL;
-}
-
-pipeline *create_pipeline(command **commands, int nb_commands)
-{
-  pipeline *pipe = malloc(sizeof(pipeline));
-  pipe->commands = commands;
-  pipe->nb_commands = nb_commands;
-  return pipe;
-}
-
-redirection *create_redirection(char *file, int fd, int mode)
-{
-  redirection *red = malloc(sizeof(redirection));
-  red->file = file;
-  red->fd = fd;
-  red->mode = mode;
-  return red;
-}
-
-void free_redirection(redirection *red)
-{
-  free(red->file);
-  free(red);
-}
-
-// Pile pour gérer les dossiers à traiter
-typedef struct stack_dir
-{
-  char *path;
-  struct stack_dir *next;
-} stack_dir;
-
-stack_dir *create_stack()
-{
-  stack_dir *stack = malloc(sizeof(stack_dir));
-  if (stack == NULL)
-  {
-    perror("malloc");
-    return NULL;
-  }
-  stack->path = NULL;
-  stack->next = NULL;
-  return stack;
-}
-
-stack_dir *push(stack_dir *stack, char *path)
-{
-  stack_dir *new_node = malloc(sizeof(stack_dir));
-  if (new_node == NULL)
-  {
-    perror("malloc");
-    return NULL;
-  }
-  new_node->path = path;
-  new_node->next = stack;
-  return new_node;
-}
-
-void free_stack(stack_dir *stack)
-{
-  while (stack != NULL)
-  {
-    stack_dir *temp = stack;
-    stack = stack->next;
-    free(temp->path);
-    free(temp);
-  }
-}
-
-char *pop(stack_dir **stack)
-{
-  if (*stack == NULL)
-  {
-    return NULL;
-  }
-  stack_dir *temp = *stack;
-  *stack = (*stack)->next;
-  char *path = temp->path;
-  free(temp);
-  return path;
+// Fonction pour renvoyer si une chaine de caractères marque la fin d'une commande
+int is_special_char(char *c) {
+  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 ||   strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{" ) == 0 || strcmp(c, "}") == 0;
 }
 
 // Fonction récursive pour construire l'AST
@@ -525,7 +214,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       // Compter les arguments
       int start_index = *index;
       // SAINTE MERE DE DIEU C'EST HORRIBLE
-      while (tokens[*index] != NULL && (strcmp(tokens[*index], ";") != 0 && strcmp(tokens[*index], "}") != 0 && strcmp(tokens[*index], "{") != 0 && strcmp(tokens[*index], "|") != 0 && strcmp(tokens[*index], ">") != 0 && strcmp(tokens[*index], "<") != 0 && strcmp(tokens[*index], ">>") != 0 && strcmp(tokens[*index], ">|") != 0))
+      while (tokens[*index] != NULL && !is_special_char(tokens[*index]))
       {
         (*index)++;
         argc++;
@@ -1123,123 +812,6 @@ int main()
   return 0;
 }
 
-// Split une chaine de caractères en fonction d'un délimiteur
-char **str_split(char *a_str, const char a_delim)
-{
-  char **result = 0;
-  size_t count = 0;
-  char *tmp = a_str;
-  char *last_comma = 0;
-  char delim[2];
-  delim[0] = a_delim;
-  delim[1] = 0;
-
-  /* Compte le nombre de tokens. */
-  while (*tmp)
-  {
-    if (a_delim == *tmp)
-    {
-      count++;
-      last_comma = tmp;
-    }
-    tmp++;
-  }
-
-  /* Ajoute un token pour la dernière chaine. */
-  count += last_comma < (a_str + strlen(a_str) - 1);
-
-  /* Ajoute un token pour le cas ou la chaine est vide */
-  count++;
-
-  result = malloc(sizeof(char *) * (count + 1));
-
-  if (result)
-  {
-    size_t idx = 0;
-    char *token = strtok(a_str, delim);
-
-    while (token)
-    {
-      assert(idx < count);
-      result[idx++] = strdup(token);
-      token = strtok(0, delim);
-    }
-    if (idx == 0)
-    {
-      result[idx++] = strdup(a_str);
-    }
-    result[idx] = 0;
-  }
-
-  return result;
-}
-
-// Libérer la mémoire allouée pour un tableau de chaînes de caractères
-void free_split(char **splited)
-{
-  for (int i = 0; *(splited + i); i++)
-  {
-    free(splited[i]);
-  }
-  free(splited);
-}
-
-char *trim_and_reduce_spaces(const char *str)
-{
-  if (str == NULL)
-    return NULL;
-
-  // Supprimer les espaces en début
-  const char *start = str;
-  while (*start == ' ' || *start == '\t' || *start == '\n')
-  {
-    start++;
-  }
-
-  // Supprimer les espaces en fin
-  const char *end = start + strlen(start) - 1;
-  while (end > start && (*end == ' ' || *end == '\t' || *end == '\n'))
-  {
-    end--;
-  }
-
-  // Calculer la longueur de la nouvelle chaîne
-  size_t new_len = end - start + 1;
-
-  // Allouer de la mémoire pour la nouvelle chaîne
-  char *new_str = malloc(new_len + 1);
-  if (new_str == NULL)
-  {
-    return NULL; // Allocation échouée
-  }
-
-  // Réduire les espaces multiples entre les mots à un seul espace
-  char *dest = new_str;
-  const char *src = start;
-  int in_space = 0;
-
-  while (src <= end)
-  {
-    if (*src == ' ' || *src == '\t' || *src == '\n')
-    {
-      if (!in_space)
-      {
-        *dest++ = ' ';
-        in_space = 1;
-      }
-    }
-    else
-    {
-      *dest++ = *src;
-      in_space = 0;
-    }
-    src++;
-  }
-  *dest = '\0';
-
-  return new_str;
-}
-
 void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value)
 {
   // Technique attroce pour calculer le nombre de chiffres dans un nombre...
@@ -1278,6 +850,7 @@ void create_prompt(char *prompt, const char *current_dir, int last_return_value)
   }
 }
 
+// A REFAIRE AVEC LA NOUVELLE STRUCTURE
 int handle_redirections(char **splited, int *last_return_value)
 {
   for (int i = 0; splited[i] != NULL; i++)
@@ -1370,7 +943,6 @@ int handle_redirections(char **splited, int *last_return_value)
       i--;
     }
   }
-
   return 0;
 }
 
