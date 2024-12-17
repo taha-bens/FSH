@@ -53,6 +53,13 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
 
   while (tokens[*index] != NULL)
   {
+
+    if (strcmp(tokens[*index], "else") == 0)
+    {
+      // Normalement il faudrait ajouter une vérification pour voir si on a pas un else sans if
+      break;
+    }
+
     if (strcmp(tokens[*index], "{") == 0)
     {
       // Impossible car elle sont traitées par le for
@@ -276,7 +283,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           then_end++;
         }
       }
-      *index = end + 2;
+      (*index) = end + 2;
       ast_node *then_block = construct_ast_recursive(tokens, index);
       // Aller chercher le bloc else si il existe il est optionnel
       if (tokens[then_end + 1] != NULL && strcmp(tokens[then_end + 1], "else") == 0)
@@ -311,20 +318,21 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           }
         }
         then_end += 3;
-        printf("then_end : %d\n", then_end);
-        ast_node *else_block = construct_ast_recursive(tokens, &then_end);
+        (*index) = then_end;
+        ast_node *else_block = construct_ast_recursive(tokens, index);
         node = create_if_node(condition, then_block, else_block);
-        printf("else_end : %d\n", else_end + 1);
-        *index = else_end + 1;
+        (*index) = else_end + 1;
+        free(condition);
+        return node;
       }
       else
       {
         node = create_if_node(condition, then_block, NULL);
         // On a fini de traiter le if on sort de la boucle
-        *index = then_end + 1;
+        (*index) = then_end + 1;
+        free(condition);
+        return node;
       }
-      free(condition);
-      break;
     }
     else
     {
@@ -500,7 +508,10 @@ void print_ast_with_depth(ast_node *node, int depth)
   switch (node->type)
   {
   case NODE_COMMAND:
-    printf("Command: %s\n", node->data.cmd.args[0]);
+    for (int i = 0; i < node->data.cmd.argc; i++)
+    {
+      printf("%s ", node->data.cmd.args[i]);
+    }
     break;
   case NODE_SEQUENCE:
     printf("Sequence\n");
@@ -515,7 +526,21 @@ void print_ast_with_depth(ast_node *node, int depth)
     printf("For loop\n");
     break;
   case NODE_IF:
-    printf("If\n");
+    printf("If statement (%s)\n", node->data.if_stmt.condition);
+    if (node->data.if_stmt.then_block != NULL)
+    {
+      for (int i = 0; i < node->data.if_stmt.then_block->data.cmd.argc; i++)
+      {
+        printf("%s ", node->data.if_stmt.then_block->data.cmd.args[i]);
+      }
+    }
+    if (node->data.if_stmt.else_block != NULL)
+    {
+      for (int i = 0; i < node->data.if_stmt.else_block->data.cmd.argc; i++)
+      {
+        printf("%s ", node->data.if_stmt.else_block->data.cmd.args[i]);
+      }
+    }
     break;
   default:
     printf("Unknown node type\n");
@@ -1133,6 +1158,11 @@ void execute_ast(ast_node *node, int *last_return_value)
         {
           // La condition n'est pas vérifiée mais la commande est valide
           *last_return_value = 0;
+          // Vérifier si on a un bloc else
+          if (node->data.if_stmt.else_block != NULL)
+          {
+            execute_ast(node->data.if_stmt.else_block, last_return_value);
+          }
           return;
         }
       }
@@ -1146,10 +1176,6 @@ void execute_ast(ast_node *node, int *last_return_value)
       if (*last_return_value == 0)
       {
         execute_ast(node->data.if_stmt.then_block, last_return_value);
-      }
-      else if (node->data.if_stmt.else_block != NULL)
-      {
-        execute_ast(node->data.if_stmt.else_block, last_return_value);
       }
     }
   }
