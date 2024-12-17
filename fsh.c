@@ -57,6 +57,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
     {
       // Impossible car elle sont traitées par le for
       fprintf(stderr, "Unexpected opening bracket\n");
+      fprintf(stderr, "At index %d\n", *index);
       return NULL;
     }
 
@@ -203,9 +204,127 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
     }
     else if (strcmp(tokens[*index], "if") == 0)
     {
-      // A implémenter
-      fprintf(stderr, "if: Not implemented\n");
+      // Vérifier si on a un crochet ouvrant qui marque le début de la condition
+      if (tokens[*index + 1] == NULL || tokens[*index + 2] == NULL || tokens[*index + 3] == NULL)
+      {
+        fprintf(stderr, "if: Invalid syntax\n");
+        return NULL;
+      }
+      // Vérifier si on a un crochet ouvrant qui marque le début de la condition
+      if (strcmp(tokens[*index + 1], "[") != 0)
+      {
+        fprintf(stderr, "if: Invalid syntax\n");
+        return NULL;
+      }
       (*index)++;
+      // Aller chercher la condition qui est une commande jusqu'au crochet fermant
+      int end = *index + 1;
+      while (tokens[end] != NULL && strcmp(tokens[end], "]") != 0)
+      {
+        end++;
+      }
+      if (tokens[end] == NULL)
+      {
+        fprintf(stderr, "if: Invalid syntax\n");
+        return NULL;
+      }
+      // Créer la condition
+      char *condition = NULL;
+      for (int i = *index + 1; i < end; i++)
+      {
+        if (condition == NULL)
+        {
+          condition = strdup(tokens[i]);
+        }
+        else
+        {
+          char *tmp = malloc(strlen(condition) + strlen(tokens[i]) + 2);
+          strcpy(tmp, condition);
+          strcat(tmp, " ");
+          strcat(tmp, tokens[i]);
+          free(condition);
+          condition = tmp;
+        }
+      }
+      // Aller chercher le bloc then
+      if (tokens[end + 1] == NULL || strcmp(tokens[end + 1], "{") != 0)
+      {
+        fprintf(stderr, "if: Invalid syntax\n");
+        free(condition);
+        return NULL;
+      }
+      int then_end = end + 2;
+      int bracket_count = 1;
+      while (bracket_count != 0)
+      {
+        if (tokens[then_end] == NULL)
+        {
+          fprintf(stderr, "if: Invalid syntax\n");
+          free(condition);
+          return NULL;
+        }
+        if (strcmp(tokens[then_end], "{") == 0)
+        {
+          bracket_count++;
+        }
+        if (strcmp(tokens[then_end], "}") == 0)
+        {
+          bracket_count--;
+        }
+        if (bracket_count != 0)
+        {
+          then_end++;
+        }
+      }
+      *index = end + 2;
+      ast_node *then_block = construct_ast_recursive(tokens, index);
+      // Aller chercher le bloc else si il existe il est optionnel
+      if (tokens[then_end + 1] != NULL && strcmp(tokens[then_end + 1], "else") == 0)
+      {
+        if (tokens[then_end + 2] == NULL || strcmp(tokens[then_end + 2], "{") != 0)
+        {
+          fprintf(stderr, "if: Invalid syntax\n");
+          free(condition);
+          return NULL;
+        }
+        int else_end = then_end + 3;
+        bracket_count = 1;
+        while (bracket_count != 0)
+        {
+          if (tokens[else_end] == NULL)
+          {
+            fprintf(stderr, "if: Invalid syntax\n");
+            free(condition);
+            return NULL;
+          }
+          if (strcmp(tokens[else_end], "{") == 0)
+          {
+            bracket_count++;
+          }
+          if (strcmp(tokens[else_end], "}") == 0)
+          {
+            bracket_count--;
+          }
+          if (bracket_count != 0)
+          {
+            else_end++;
+          }
+        }
+        then_end += 3;
+        printf("then_end : %d\n", then_end);
+        ast_node *else_block = construct_ast_recursive(tokens, &then_end);
+        node = create_if_node(condition, then_block, else_block);
+        printf("else_end : %d\n", else_end + 1);
+        *index = else_end + 1;
+      }
+      else
+      {
+        node = create_if_node(condition, then_block, NULL);
+        // On a fini de traiter le if on sort de la boucle
+        *index = then_end + 1;
+      }
+      free(condition);
+      break;
     }
     else
     {
@@ -969,6 +1088,70 @@ void execute_ast(ast_node *node, int *last_return_value)
   if (node == NULL)
   {
     return;
+  }
+
+  if (node->type == NODE_IF)
+  {
+    // Vérifier la condition
+    int status;
+    pid_t pid = fork();
+    if (pid == 0)
+    {
+      // Construire les arguments pour la commande test
+      char **splited = str_split(node->data.if_stmt.condition, ' ');
+      int argc = 0;
+      for (int i = 0; splited[i] != NULL; i++)
+      {
+        argc++;
+      }
+      char **args = malloc((argc + 2) * sizeof(char *));
+      args[0] = "test";
+      for (int i = 0; splited[i] != NULL; i++)
+      {
+        args[i + 1] = splited[i];
+      }
+      args[argc + 1] = NULL;
+      execvp("test", args);
+      free_split(splited);
+      free(args);
+      perror("execvp");
+      exit(EXIT_FAILURE);
+    }
+    else if (pid < 0)
+    {
+      perror("fork");
+      *last_return_value = 1;
+      return;
+    }
+    else
+    {
+      waitpid(pid, &status, 0);
+      if (WIFEXITED(status))
+      {
+        *last_return_value = WEXITSTATUS(status);
+        if (*last_return_value != 0)
+        {
+          // La condition n'est pas vérifiée mais la commande est valide
+          *last_return_value = 0;
+          return;
+        }
+      }
+      else
+      {
+        // Il y a eu une erreur lors de l'exécution de la commande
+        *last_return_value = 1;
+        return;
+      }
+
+      if (*last_return_value == 0)
+      {
+        execute_ast(node->data.if_stmt.then_block, last_return_value);
+      }
+      else if (node->data.if_stmt.else_block != NULL)
+      {
+        execute_ast(node->data.if_stmt.else_block, last_return_value);
+      }
+    }
   }
 
   if (node->type == NODE_FOR_LOOP)
