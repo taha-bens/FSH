@@ -6,39 +6,23 @@
 
 #include "headers/pwd.h"
 
-char *chemin_du_fichier(char *dir_name, char *file_name)
-{
-  DIR *dir = opendir(dir_name);
-  if (dir == NULL)
-  {
-    perror("opendir");
-    return NULL;
-  }
-
-  struct dirent *entry;
-  char *path = NULL;
-  while ((entry = readdir(dir)) != NULL)
-  {
-    if (strcmp(entry->d_name, file_name) == 0)
-    {
-      path = malloc(strlen(dir_name) + strlen(file_name) + 3);
-      if (path == NULL)
-      {
-        perror("malloc");
-        closedir(dir);
-        return NULL;
-      }
-      snprintf(path, strlen(dir_name) + strlen(file_name) + 3, "%s/%s", dir_name, file_name);
-      break;
-    }
-  }
-  closedir(dir);
-  return path;
-}
-
+// Fonction pour vérifier si un chemin est absolu
 int is_absolute_path(char *path)
 {
   return path[0] == '/';
+}
+
+// Fonction pour construire le chemin complet d'un fichier
+char *chemin_du_fichier(char *dir_name, char *file_name)
+{
+  char *path = malloc(strlen(dir_name) + strlen(file_name) + 2);
+  if (path == NULL)
+  {
+    perror("malloc");
+    return NULL;
+  }
+  snprintf(path, strlen(dir_name) + strlen(file_name) + 2, "%s/%s", dir_name, file_name);
+  return path;
 }
 
 // Fonction pour afficher le type d'un fichier
