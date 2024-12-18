@@ -307,6 +307,24 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       }
       (*index) = end + 1 + saut;
       ast_node *then_block = construct_ast_recursive(tokens, index);
+      // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
+      (*index)--; // On a déjà incrémenté l'index
+      while (*index < then_end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      {
+        (*index)++;
+        ast_node *child = construct_ast_recursive(tokens, index);
+        if (child != NULL)
+        {
+          add_child(then_block, child);
+          (*index)--;
+        }
+        else
+        {
+          free_ast_node(then_block);
+          free(condition);
+          return NULL;
+        }
+      }
       // Aller chercher le bloc else si il existe il est optionnel
       if (tokens[then_end + 1] != NULL && strcmp(tokens[then_end + 1], "else") == 0)
       {
@@ -342,6 +360,25 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         then_end += 3;
         (*index) = then_end;
         ast_node *else_block = construct_ast_recursive(tokens, index);
+        // Si il y a un point virgule et qu'on a pas atteint la fin
+        (*index)--; // On a déjà incrémenté l'index
+        while (*index < else_end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
+        {
+          (*index)++;
+          ast_node *child = construct_ast_recursive(tokens, index);
+          if (child != NULL)
+          {
+            add_child(else_block, child);
+            (*index)--;
+          }
+          else
+          {
+            free_ast_node(then_block);
+            free_ast_node(else_block);
+            free(condition);
+            return NULL;
+          }
+        }
         node = create_if_node(condition, then_block, else_block, sans_crochet);
         (*index) = else_end + 1;
         free(condition);
