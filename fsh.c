@@ -218,34 +218,28 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         fprintf(stderr, "if: Invalid syntax\n");
         return NULL;
       }
-     //for (char **ptr = tokens; *ptr != NULL; ptr++)
-     //{
-     //        fprintf(stderr, "%s\n",*ptr);
-     //}
-      
+
       int end = 0;
       bool sans_crochet = strcmp(tokens[*index + 1], "[") != 0;
       // Vérifier si on a un crochet ouvrant qui marque le début de la condition
       if (sans_crochet)
       {
         // Aller chercher la condition qui est une commande jusqu'a l'acollade ouvrante
-        //fprintf(stderr, "if sans crochet\n");
+
         (*index)++;
         end = *index + 1;
         while (tokens[end] != NULL && strcmp(tokens[end], "{") != 0)
         {
           end++;
-        }        
+        }
 
         if (tokens[end] == NULL)
         {
           fprintf(stderr, "if: Invalid syntax\n");
           return NULL;
         }
-        //fprintf(stderr, "if: Invalid syntax\n");
-        //return NULL;
-      } 
-      // avec crochet
+      }
+      // Avec crochet
       else
       {
         (*index)++;
@@ -261,16 +255,12 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           return NULL;
         }
       }
-      //fprintf(stderr, "index : %d \n",*index);
-      //fprintf(stderr, "char index : %s  \n",tokens[*index]);
-      //fprintf(stderr, "end : %d \n",end);
-      //fprintf(stderr, "char end : %s \n",tokens[end]);
+
       // Créer la condition
       char *condition = NULL;
       int saut = sans_crochet ? 0 : 1;
       for (int i = *index + saut; i < end; i++)
       {
-        //fprintf(stderr, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa %s\n",tokens[i]);
         if (condition == NULL)
         {
           condition = strdup(tokens[i]);
@@ -352,14 +342,14 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         then_end += 3;
         (*index) = then_end;
         ast_node *else_block = construct_ast_recursive(tokens, index);
-        node = create_if_node(condition, then_block, else_block);
+        node = create_if_node(condition, then_block, else_block, sans_crochet);
         (*index) = else_end + 1;
         free(condition);
         return node;
       }
       else
       {
-        node = create_if_node(condition, then_block, NULL);
+        node = create_if_node(condition, then_block, NULL, sans_crochet);
         // On a fini de traiter le if on sort de la boucle
         (*index) = then_end + 1;
         free(condition);
@@ -1168,25 +1158,38 @@ void execute_ast(ast_node *node, int *last_return_value)
     pid_t pid = fork();
     if (pid == 0)
     {
-      // Construire les arguments pour la commande test
-      char **splited = str_split(node->data.if_stmt.condition, ' ');
-      int argc = 0;
-      for (int i = 0; splited[i] != NULL; i++)
+      // Vérifier si on a une condition avec crochet
+      bool no_square_brackets = node->data.if_stmt.no_square_bracket;
+      if (!no_square_brackets)
       {
-        argc++;
+        // Construire les arguments pour la commande test
+        char **splited = str_split(node->data.if_stmt.condition, ' ');
+        int argc = 0;
+        for (int i = 0; splited[i] != NULL; i++)
+        {
+          argc++;
+        }
+        char **args = malloc((argc + 2) * sizeof(char *));
+        args[0] = "test";
+        for (int i = 0; splited[i] != NULL; i++)
+        {
+          args[i + 1] = splited[i];
+        }
+        args[argc + 1] = NULL;
+        execvp("test", args);
+        free_split(splited);
+        free(args);
+        perror("execvp");
+        exit(EXIT_FAILURE);
       }
-      char **args = malloc((argc + 2) * sizeof(char *));
-      args[0] = "test";
-      for (int i = 0; splited[i] != NULL; i++)
-      {
-        args[i + 1] = splited[i];
+      else {
+        // On ne fais pas la commande test c'est une commande donnée par l'utilisateur
+        char **splited = str_split(node->data.if_stmt.condition, ' ');
+        execvp(splited[0], splited);
+        free_split(splited);
+        perror("execvp");
+        exit(EXIT_FAILURE);
       }
-      args[argc + 1] = NULL;
-      execvp("test", args);
-      free_split(splited);
-      free(args);
-      perror("execvp");
-      exit(EXIT_FAILURE);
     }
     else if (pid < 0)
     {

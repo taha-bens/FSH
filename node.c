@@ -1,5 +1,6 @@
 # include <stdlib.h>
 # include <string.h>
+# include <stdbool.h>
 
 typedef struct ast_node ast_node;
 
@@ -35,6 +36,7 @@ typedef struct redirection
 typedef struct if_statement
 {
   char *condition;
+  bool no_square_bracket;
   ast_node *then_block;
   ast_node *else_block;
 } if_statement;
@@ -109,12 +111,13 @@ ast_node *create_pipeline_node(command **commands, int nb_commands)
   return node;
 }
 
-ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block)
+ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block, bool no_square_bracket)
 {
   ast_node *node = create_ast_node(NODE_IF, condition);
   node->data.if_stmt.condition = strdup(condition);
   node->data.if_stmt.then_block = then_block;
   node->data.if_stmt.else_block = else_block;
+  node->data.if_stmt.no_square_bracket = no_square_bracket;
   return node;
 }
 
