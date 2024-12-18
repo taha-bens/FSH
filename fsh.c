@@ -810,6 +810,8 @@ void execute_for(ast_node *node, int *last_return_value)
   files = realloc(files, (files_len + 1) * sizeof(char *));
   files[files_len] = NULL;
 
+  int previous_return_value = *last_return_value;
+
   // Il faut maintenant exécuter les commandes pour chaque fichier
   for (int i = 0; files[i] != NULL; i++)
   {
@@ -819,9 +821,21 @@ void execute_for(ast_node *node, int *last_return_value)
     // Exécuter les commandes
     execute_ast(loop->block, last_return_value);
 
-    // Vérifier le code de retour
-    if (*last_return_value != 0)
+    if (*last_return_value == 1)
+    {
       break;
+    }
+
+    // Faire le max entre le retour de la commande et le retour précédent
+    if (*last_return_value > previous_return_value)
+    {
+      previous_return_value = *last_return_value;
+    }
+  }
+
+  if (*last_return_value != 1)
+  {
+    *last_return_value = previous_return_value;
   }
 
   // Libérer la mémoire allouée pour les fichiers
