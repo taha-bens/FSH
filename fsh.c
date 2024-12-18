@@ -845,7 +845,6 @@ void execute_for(ast_node *node, int *last_return_value)
     // Définir la variable d'environnement
     setenv(loop->variable, files[i], 1);
 
-    // Exécuter les commandes
     execute_ast(loop->block, last_return_value);
 
     if (*last_return_value == 1)
@@ -1190,6 +1189,47 @@ void execute_ast(ast_node *node, int *last_return_value)
 
   if (node->type == NODE_IF)
   {
+    // Appliquer la substitution de variable sur la condition
+    char *condition = strdup(node->data.if_stmt.condition);
+    char *dollar_pos = strchr(condition, '$');
+    while (dollar_pos != NULL)
+    {
+      // On a un $ on doit faire une substitution
+      // Les variables ne sont qu'une lettre
+      char *var_name = malloc(2);
+      strncpy(var_name, dollar_pos + 1, 1);
+      var_name[1] = '\0';
+      char *var_value = getenv(var_name);
+      if (var_value == NULL)
+      {
+        fprintf(stderr, "Variable %s not set\n", var_name);
+        *last_return_value = 1;
+        free(condition);
+        return;
+      }
+      // On a la valeur de la variable on peut la remplacer
+      size_t expanded_len = strlen(condition) + strlen(var_value) - 1;
+      char *expanded = malloc(expanded_len + 1);
+      if (expanded == NULL)
+      {
+        perror("malloc");
+        *last_return_value = 1;
+        free(var_name);
+        free(condition);
+        return;
+      }
+      char *suffix = dollar_pos + 1;
+      strncpy(expanded, condition, dollar_pos - condition);
+      expanded[dollar_pos - condition] = '\0';
+      strcat(expanded, var_value);
+      strcat(expanded, suffix + 1);
+      free(condition);
+      condition = expanded;
+      free(var_name);
+
+      // Rechercher la prochaine occurrence de $
+      dollar_pos = strchr(condition, '$');
+    }
     // Vérifier la condition
     int status;
     pid_t pid = fork();
@@ -1200,7 +1240,7 @@ void execute_ast(ast_node *node, int *last_return_value)
       if (!no_square_brackets)
       {
         // Construire les arguments pour la commande test
-        char **splited = str_split(node->data.if_stmt.condition, ' ');
+        char **splited = str_split(condition, ' ');
         int argc = 0;
         for (int i = 0; splited[i] != NULL; i++)
         {
@@ -1219,9 +1259,10 @@ void execute_ast(ast_node *node, int *last_return_value)
         perror("execvp");
         exit(EXIT_FAILURE);
       }
-      else {
+      else
+      {
         // On ne fais pas la commande test c'est une commande donnée par l'utilisateur
-        char **splited = str_split(node->data.if_stmt.condition, ' ');
+        char **splited = str_split(condition, ' ');
         execvp(splited[0], splited);
         free_split(splited);
         perror("execvp");
@@ -1243,6 +1284,7 @@ void execute_ast(ast_node *node, int *last_return_value)
         if (*last_return_value != 0)
         {
           // La condition n'est pas vérifiée mais la commande est valide
+          free(condition);
           *last_return_value = 0;
           // Vérifier si on a un bloc else
           if (node->data.if_stmt.else_block != NULL)
@@ -1255,12 +1297,14 @@ void execute_ast(ast_node *node, int *last_return_value)
       else
       {
         // Il y a eu une erreur lors de l'exécution de la commande
+        free(condition);
         *last_return_value = 1;
         return;
       }
 
       if (*last_return_value == 0)
       {
+        free(condition);
         execute_ast(node->data.if_stmt.then_block, last_return_value);
       }
     }
