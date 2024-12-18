@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <stdbool.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -217,28 +218,59 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         fprintf(stderr, "if: Invalid syntax\n");
         return NULL;
       }
+     //for (char **ptr = tokens; *ptr != NULL; ptr++)
+     //{
+     //        fprintf(stderr, "%s\n",*ptr);
+     //}
+      
+      int end = 0;
+      bool sans_crochet = strcmp(tokens[*index + 1], "[") != 0;
       // Vérifier si on a un crochet ouvrant qui marque le début de la condition
-      if (strcmp(tokens[*index + 1], "[") != 0)
+      if (sans_crochet)
       {
-        fprintf(stderr, "if: Invalid syntax\n");
-        return NULL;
-      }
-      (*index)++;
-      // Aller chercher la condition qui est une commande jusqu'au crochet fermant
-      int end = *index + 1;
-      while (tokens[end] != NULL && strcmp(tokens[end], "]") != 0)
+        // Aller chercher la condition qui est une commande jusqu'a l'acollade ouvrante
+        //fprintf(stderr, "if sans crochet\n");
+        (*index)++;
+        end = *index + 1;
+        while (tokens[end] != NULL && strcmp(tokens[end], "{") != 0)
+        {
+          end++;
+        }        
+
+        if (tokens[end] == NULL)
+        {
+          fprintf(stderr, "if: Invalid syntax\n");
+          return NULL;
+        }
+        //fprintf(stderr, "if: Invalid syntax\n");
+        //return NULL;
+      } 
+      // avec crochet
+      else
       {
-        end++;
+        (*index)++;
+        // Aller chercher la condition qui est une commande jusqu'au crochet fermant
+        end = *index + 1;
+        while (tokens[end] != NULL && strcmp(tokens[end], "]") != 0)
+        {
+          end++;
+        }
+        if (tokens[end] == NULL)
+        {
+          fprintf(stderr, "if: Invalid syntax\n");
+          return NULL;
+        }
       }
-      if (tokens[end] == NULL)
-      {
-        fprintf(stderr, "if: Invalid syntax\n");
-        return NULL;
-      }
+      //fprintf(stderr, "index : %d \n",*index);
+      //fprintf(stderr, "char index : %s  \n",tokens[*index]);
+      //fprintf(stderr, "end : %d \n",end);
+      //fprintf(stderr, "char end : %s \n",tokens[end]);
       // Créer la condition
       char *condition = NULL;
-      for (int i = *index + 1; i < end; i++)
+      int saut = sans_crochet ? 0 : 1;
+      for (int i = *index + saut; i < end; i++)
       {
+        //fprintf(stderr, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa %s\n",tokens[i]);
         if (condition == NULL)
         {
           condition = strdup(tokens[i]);
@@ -254,13 +286,13 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         }
       }
       // Aller chercher le bloc then
-      if (tokens[end + 1] == NULL || strcmp(tokens[end + 1], "{") != 0)
+      if (tokens[end + saut] == NULL || strcmp(tokens[end + saut], "{") != 0)
       {
         fprintf(stderr, "if: Invalid syntax\n");
         free(condition);
         return NULL;
       }
-      int then_end = end + 2;
+      int then_end = end + 1 + saut;
       int bracket_count = 1;
       while (bracket_count != 0)
       {
@@ -283,7 +315,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           then_end++;
         }
       }
-      (*index) = end + 2;
+      (*index) = end + 1 + saut;
       ast_node *then_block = construct_ast_recursive(tokens, index);
       // Aller chercher le bloc else si il existe il est optionnel
       if (tokens[then_end + 1] != NULL && strcmp(tokens[then_end + 1], "else") == 0)
