@@ -41,8 +41,7 @@ typedef struct redirection
 // Structure pour une condition if
 typedef struct if_statement
 {
-  char *condition;
-  bool no_square_bracket;
+  struct ast_node *condition;
   struct ast_node *then_block;
   struct ast_node *else_block;
 } if_statement;
@@ -81,7 +80,7 @@ typedef struct ast_node
 ast_node *create_ast_node(node_type type, char *value);
 ast_node *create_command_node(char **args, int argc);
 ast_node *create_pipeline_node(command **commands, int nb_commands);
-ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block, bool no_square_bracket);
+ast_node *create_if_node(ast_node *condition, ast_node *then_block, ast_node *else_block);
 ast_node *create_for_node(char *dir, char *variable, char **options, int show_all, int recursive, char *ext, char *type, int max_files, ast_node *block);
 ast_node *create_redirection_node(char *file, int fd, int mode);
 

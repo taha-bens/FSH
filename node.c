@@ -35,8 +35,7 @@ typedef struct redirection
 
 typedef struct if_statement
 {
-  char *condition;
-  bool no_square_bracket;
+  ast_node *condition;
   ast_node *then_block;
   ast_node *else_block;
 } if_statement;
@@ -111,13 +110,12 @@ ast_node *create_pipeline_node(command **commands, int nb_commands)
   return node;
 }
 
-ast_node *create_if_node(char *condition, ast_node *then_block, ast_node *else_block, bool no_square_bracket)
+ast_node *create_if_node(ast_node *condition, ast_node *then_block, ast_node *else_block)
 {
-  ast_node *node = create_ast_node(NODE_IF, condition);
-  node->data.if_stmt.condition = strdup(condition);
+  ast_node *node = create_ast_node(NODE_IF, "IF");
+  node->data.if_stmt.condition = condition;
   node->data.if_stmt.then_block = then_block;
   node->data.if_stmt.else_block = else_block;
-  node->data.if_stmt.no_square_bracket = no_square_bracket;
   return node;
 }
 
@@ -222,7 +220,7 @@ void free_ast_node(ast_node *node)
     node->data.for_loop.block = NULL;
     break;
   case NODE_IF:
-    free(node->data.if_stmt.condition);
+    free_ast_node(node->data.if_stmt.condition);
     node->data.if_stmt.condition = NULL;
     free_ast_node(node->data.if_stmt.then_block);
     node->data.if_stmt.then_block = NULL;

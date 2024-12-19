@@ -39,7 +39,7 @@ void cleanup_and_exit(int last_return_value, ast_node *tree);
 // Fonction pour renvoyer si une chaine de caractères marque la fin d'une commande
 int is_special_char(char *c)
 {
-  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{") == 0 || strcmp(c, "}") == 0;
+  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{") == 0 || strcmp(c, "}") == 0 || strcmp(c, "]") == 0;
 }
 
 int is_redirection_char(char *c)
@@ -61,8 +61,25 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       break;
     }
 
+    if (strcmp(tokens[*index], "]") == 0)
+    {
+      (*index)++;
+      break;
+    }
+
     if (strcmp(tokens[*index], "{") == 0)
     {
+      // Regarder si on a pas un if avant le bloc
+      int if_index = *index - 1;
+      while (if_index >= 0 && strcmp(tokens[if_index], "if") != 0)
+      {
+        if_index--;
+      }
+      if (if_index >= 0 && strcmp(tokens[if_index], "if") == 0)
+      {
+        // On a un if avant le bloc il n'y a aucun traitement à faire
+        break;
+      }
       // Impossible car elle sont traitées par le for
       fprintf(stderr, "Unexpected opening bracket\n");
       fprintf(stderr, "At index %d\n", *index);
@@ -224,7 +241,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       // Vérifier si on a un crochet ouvrant qui marque le début de la condition
       if (sans_crochet)
       {
-        // Aller chercher la condition qui est une commande jusqu'a l'acollade ouvrante
+        // Aller chercher la condition qui peut être une succession de commandes jusqu'à l'accolade ouvrante
 
         (*index)++;
         end = *index + 1;
@@ -256,30 +273,69 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         }
       }
 
-      // Créer la condition
-      char *condition = NULL;
+      // Construire la condition
+      ast_node *condition_node = create_ast_node(NODE_SEQUENCE, "CONDITION");
       int saut = sans_crochet ? 0 : 1;
-      for (int i = *index + saut; i < end; i++)
+      if (sans_crochet)
       {
-        if (condition == NULL)
+        // Aller chercher la condition qui est une succession de commandes jusqu'à l'accolade ouvrante
+        while (*index < end)
         {
-          condition = strdup(tokens[i]);
-        }
-        else
-        {
-          char *tmp = malloc(strlen(condition) + strlen(tokens[i]) + 2);
-          strcpy(tmp, condition);
-          strcat(tmp, " ");
-          strcat(tmp, tokens[i]);
-          free(condition);
-          condition = tmp;
+          ast_node *child = construct_ast_recursive(tokens, index);
+          if (child != NULL)
+          {
+            add_child(condition_node, child);
+          }
+          else
+          {
+            free_ast_node(condition_node);
+            return NULL;
+          }
         }
       }
+      if (!sans_crochet)
+      {
+        (*index)++;
+        while (*index < end)
+        {
+          ast_node *child = construct_ast_recursive(tokens, index);
+          // Si c'est avec crochet on ajoute test devant la commande
+          if (child != NULL)
+          {
+            char **args = child->data.cmd.args;
+            char **new_args = malloc((child->data.cmd.argc + 2) * sizeof(char *));
+            new_args[0] = strdup("test");
+            for (int j = 0; j < child->data.cmd.argc; j++)
+            {
+              new_args[j + 1] = strdup(args[j]);
+            }
+            new_args[child->data.cmd.argc + 1] = NULL;
+
+            // Libérer les anciens arguments
+            for (int j = 0; j < child->data.cmd.argc; j++)
+            {
+              free(args[j]);
+            }
+            free(child->data.cmd.args);
+            // Ne pas oublier aussi NULL
+            child->data.cmd.args = new_args;
+            child->data.cmd.argc++;
+            child->data.cmd.args[child->data.cmd.argc] = NULL;
+            add_child(condition_node, child);
+          }
+          else
+          {
+            free_ast_node(condition_node);
+            return NULL;
+          }
+        }
+      }
+
       // Aller chercher le bloc then
       if (tokens[end + saut] == NULL || strcmp(tokens[end + saut], "{") != 0)
       {
         fprintf(stderr, "if: Invalid syntax\n");
-        free(condition);
+        free_ast_node(condition_node);
         return NULL;
       }
       int then_end = end + 1 + saut;
@@ -289,7 +345,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         if (tokens[then_end] == NULL)
         {
           fprintf(stderr, "if: Invalid syntax\n");
-          free(condition);
+          free_ast_node(condition_node);
           return NULL;
         }
         if (strcmp(tokens[then_end], "{") == 0)
@@ -321,7 +377,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         else
         {
           free_ast_node(then_block);
-          free(condition);
+          free_ast_node(condition_node);
           return NULL;
         }
       }
@@ -331,7 +387,8 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         if (tokens[then_end + 2] == NULL || strcmp(tokens[then_end + 2], "{") != 0)
         {
           fprintf(stderr, "if: Invalid syntax\n");
-          free(condition);
+          free_ast_node(then_block);
+          free_ast_node(condition_node);
           return NULL;
         }
         int else_end = then_end + 3;
@@ -341,7 +398,8 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           if (tokens[else_end] == NULL)
           {
             fprintf(stderr, "if: Invalid syntax\n");
-            free(condition);
+            free_ast_node(then_block);
+            free_ast_node(condition_node);
             return NULL;
           }
           if (strcmp(tokens[else_end], "{") == 0)
@@ -375,21 +433,19 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           {
             free_ast_node(then_block);
             free_ast_node(else_block);
-            free(condition);
+            free_ast_node(condition_node);
             return NULL;
           }
         }
-        node = create_if_node(condition, then_block, else_block, sans_crochet);
+        node = create_if_node(condition_node, then_block, else_block);
         (*index) = else_end + 1;
-        free(condition);
         return node;
       }
       else
       {
-        node = create_if_node(condition, then_block, NULL, sans_crochet);
+        node = create_if_node(condition_node, then_block, NULL);
         // On a fini de traiter le if on sort de la boucle
         (*index) = then_end + 1;
-        free(condition);
         return node;
       }
     }
@@ -585,7 +641,6 @@ void print_ast_with_depth(ast_node *node, int depth)
     printf("For loop\n");
     break;
   case NODE_IF:
-    printf("If statement (%s)\n", node->data.if_stmt.condition);
     if (node->data.if_stmt.then_block != NULL)
     {
       for (int i = 0; i < node->data.if_stmt.then_block->data.cmd.argc; i++)
@@ -1189,125 +1244,27 @@ void execute_ast(ast_node *node, int *last_return_value)
 
   if (node->type == NODE_IF)
   {
-    // Appliquer la substitution de variable sur la condition
-    char *condition = strdup(node->data.if_stmt.condition);
-    char *dollar_pos = strchr(condition, '$');
-    while (dollar_pos != NULL)
+    // Vérifier la condition du if en exécutant sa commande et tous ses enfants
+    int *if_return_value = malloc(sizeof(int));
+    *if_return_value = 0;
+    ast_node *condition = node->data.if_stmt.condition;
+    // Exécuter la condition
+    execute_ast(condition, if_return_value);
+    // Récupérer le retour de la condition
+    if (*if_return_value == 0)
     {
-      // On a un $ on doit faire une substitution
-      // Les variables ne sont qu'une lettre
-      char *var_name = malloc(2);
-      strncpy(var_name, dollar_pos + 1, 1);
-      var_name[1] = '\0';
-      char *var_value = getenv(var_name);
-      if (var_value == NULL)
-      {
-        fprintf(stderr, "Variable %s not set\n", var_name);
-        *last_return_value = 1;
-        free(condition);
-        return;
-      }
-      // On a la valeur de la variable on peut la remplacer
-      size_t expanded_len = strlen(condition) + strlen(var_value) - 1;
-      char *expanded = malloc(expanded_len + 1);
-      if (expanded == NULL)
-      {
-        perror("malloc");
-        *last_return_value = 1;
-        free(var_name);
-        free(condition);
-        return;
-      }
-      char *suffix = dollar_pos + 1;
-      strncpy(expanded, condition, dollar_pos - condition);
-      expanded[dollar_pos - condition] = '\0';
-      strcat(expanded, var_value);
-      strcat(expanded, suffix + 1);
-      free(condition);
-      condition = expanded;
-      free(var_name);
-
-      // Rechercher la prochaine occurrence de $
-      dollar_pos = strchr(condition, '$');
-    }
-    // Vérifier la condition
-    int status;
-    pid_t pid = fork();
-    if (pid == 0)
-    {
-      // Vérifier si on a une condition avec crochet
-      bool no_square_brackets = node->data.if_stmt.no_square_bracket;
-      if (!no_square_brackets)
-      {
-        // Construire les arguments pour la commande test
-        char **splited = str_split(condition, ' ');
-        int argc = 0;
-        for (int i = 0; splited[i] != NULL; i++)
-        {
-          argc++;
-        }
-        char **args = malloc((argc + 2) * sizeof(char *));
-        args[0] = "test";
-        for (int i = 0; splited[i] != NULL; i++)
-        {
-          args[i + 1] = splited[i];
-        }
-        args[argc + 1] = NULL;
-        execvp("test", args);
-        free_split(splited);
-        free(args);
-        perror("execvp");
-        exit(EXIT_FAILURE);
-      }
-      else
-      {
-        // On ne fais pas la commande test c'est une commande donnée par l'utilisateur
-        char **splited = str_split(condition, ' ');
-        execvp(splited[0], splited);
-        free_split(splited);
-        perror("execvp");
-        exit(EXIT_FAILURE);
-      }
-    }
-    else if (pid < 0)
-    {
-      perror("fork");
-      *last_return_value = 1;
-      return;
+      // Si la condition est vraie, exécuter le bloc then
+      execute_ast(node->data.if_stmt.then_block, last_return_value);
     }
     else
     {
-      waitpid(pid, &status, 0);
-      if (WIFEXITED(status))
+      // Si la condition est fausse, exécuter le bloc else s'il existe
+      if (node->data.if_stmt.else_block != NULL)
       {
-        *last_return_value = WEXITSTATUS(status);
-        if (*last_return_value != 0)
-        {
-          // La condition n'est pas vérifiée mais la commande est valide
-          free(condition);
-          *last_return_value = 0;
-          // Vérifier si on a un bloc else
-          if (node->data.if_stmt.else_block != NULL)
-          {
-            execute_ast(node->data.if_stmt.else_block, last_return_value);
-          }
-          return;
-        }
-      }
-      else
-      {
-        // Il y a eu une erreur lors de l'exécution de la commande
-        free(condition);
-        *last_return_value = 1;
-        return;
-      }
-
-      if (*last_return_value == 0)
-      {
-        free(condition);
-        execute_ast(node->data.if_stmt.then_block, last_return_value);
+        execute_ast(node->data.if_stmt.else_block, last_return_value);
       }
     }
+    free(if_return_value);
   }
 
   if (node->type == NODE_FOR_LOOP)
