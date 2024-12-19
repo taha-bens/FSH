@@ -936,7 +936,26 @@ void execute_for(ast_node *node, int *last_return_value)
 
     if (*last_return_value == 1)
     {
-      break;
+      // Quitter la boucle si une commande a échoué
+      // Libérer la mémoire allouée pour les fichiers
+      for (int i = 0; files[i] != NULL; i++)
+      {
+        free(files[i]);
+      }
+      free(files);
+
+      free(loop->dir);
+      loop->dir = NULL;
+
+      // Restaurer dir à sa valeur d'origine
+      loop->dir = strdup(original_dir);
+
+      // Libérer la mémoire allouée pour le chemin du répertoire
+      free(original_dir);
+
+      // Supprimer la variable d'environnement temporaire
+      unsetenv(loop->variable);
+      return;
     }
 
     // Faire le max entre le retour de la commande et le retour précédent
@@ -946,8 +965,7 @@ void execute_for(ast_node *node, int *last_return_value)
     }
   }
 
-  if (*last_return_value != 1)
-  {
+  if (*last_return_value != 0){
     *last_return_value = previous_return_value;
   }
 
