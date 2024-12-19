@@ -190,6 +190,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           free(variable);
           return NULL;
         }
+
         if (strcmp(tokens[end], "{") == 0)
         {
           bracket_count++;
@@ -242,14 +243,44 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       if (sans_crochet)
       {
         // Aller chercher la condition qui peut être une succession de commandes jusqu'à l'accolade ouvrante
-
         (*index)++;
-        end = *index + 1;
+        end = *index;
         while (tokens[end] != NULL && strcmp(tokens[end], "{") != 0)
         {
+          if (strcmp(tokens[end], "for") == 0)
+          {
+            // S'avancer jusqu'à la première accolade ouvrante
+            while (tokens[end] != NULL && strcmp(tokens[end], "{") != 0)
+            {
+              end++;
+            }
+            // Trouver son accolade fermante en comptant les accolades ouvrantes
+            int bracket_count = 1;
+            end++;
+            while (bracket_count != 0)
+            {
+              if (tokens[end] == NULL)
+              {
+                fprintf(stderr, "for: Invalid syntax\n");
+                return NULL;
+              }
+
+              if (strcmp(tokens[end], "{") == 0)
+              {
+                bracket_count++;
+              }
+              if (strcmp(tokens[end], "}") == 0)
+              {
+                bracket_count--;
+              }
+              if (bracket_count != 0)
+              {
+                end++;
+              }
+            }
+          }
           end++;
         }
-
         if (tokens[end] == NULL)
         {
           fprintf(stderr, "if: Invalid syntax\n");
@@ -402,6 +433,7 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
             free_ast_node(condition_node);
             return NULL;
           }
+
           if (strcmp(tokens[else_end], "{") == 0)
           {
             bracket_count++;
