@@ -1071,8 +1071,67 @@ void execute_command(ast_node *node, int *last_return_value)
     if (node->children[i]->type == NODE_REDIRECTION)
     {
       redirection *redir = &node->children[i]->data.redir;
+      char *file_name = redir->file;
+      // Vérifier si il n'y a pas de substitution à faire pour le nom du fichier
+      char *dollar_pos = strchr(file_name, '$');
+      if (dollar_pos != NULL)
+      {
+        // On a un $ on doit faire une substitution
+        // Les variables ne sont qu'une lettre
+        char *var_name = malloc(2);
+        strncpy(var_name, dollar_pos + 1, 1);
+        var_name[1] = '\0';
+        char *var_value = getenv(var_name);
+        if (var_value == NULL)
+        {
+          fprintf(stderr, "Variable %s not set\n", var_name);
+          *last_return_value = 1;
+          restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(cmd->args[i]);
+            cmd->args[i] = strdup(copy_args[i]);
+          }
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(copy_args[i]);
+          }
+          free(copy_args);
+          free(var_name);
+          return;
+        }
+        // On a la valeur de la variable on peut la remplacer
+        size_t expanded_len = strlen(file_name) + strlen(var_value) - 1;
+        char *expanded = malloc(expanded_len + 1);
+        if (expanded == NULL)
+        {
+          perror("malloc");
+          *last_return_value = 1;
+          restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(cmd->args[i]);
+            cmd->args[i] = strdup(copy_args[i]);
+          }
+          for (int i = 0; i < cmd->argc; i++)
+          {
+            free(copy_args[i]);
+          }
+          free(copy_args);
+          free(var_name);
+          return;
+        }
+        char *suffix = dollar_pos + 1;
+        strncpy(expanded, file_name, dollar_pos - file_name);
+        expanded[dollar_pos - file_name] = '\0';
+        strcat(expanded, var_value);
+        strcat(expanded, suffix + 1);
+        file_name = expanded;
+        free(var_name);
+      }
+      
       // Appliquer la redirection
-      int fd = open(redir->file, redir->mode, 0664);
+      int fd = open(file_name, redir->mode, 0664);
       if (fd == -1)
       {
         perror("open");
