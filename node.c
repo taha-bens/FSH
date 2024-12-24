@@ -20,11 +20,6 @@ typedef struct command
   int argc;
 } command;
 
-typedef struct pipeline
-{
-  command **commands;
-  int nb_commands;
-} pipeline;
 
 typedef struct redirection
 {
@@ -61,7 +56,6 @@ typedef struct ast_node
   union
   {
     command cmd;
-    pipeline pipe;
     redirection redir;
     if_statement if_stmt;
     for_loop for_loop;
@@ -98,15 +92,13 @@ ast_node *create_command_node(char **args, int argc)
   return node;
 }
 
-ast_node *create_pipeline_node(command **commands, int nb_commands)
+ast_node *create_pipeline_node(ast_node *first, ast_node *second)
 {
   ast_node *node = create_ast_node(NODE_PIPELINE, "|");
-  node->data.pipe.commands = malloc(nb_commands * sizeof(command *));
-  for (int i = 0; i < nb_commands; i++)
-  {
-    node->data.pipe.commands[i] = commands[i];
-  }
-  node->data.pipe.nb_commands = nb_commands;
+  node->children = malloc(2 * sizeof(ast_node *));
+  node->children[0] = first;
+  node->children[1] = second;
+  node->child_count = 2;
   return node;
 }
 
@@ -157,16 +149,6 @@ void free_command(command *cmd)
     free(cmd->args[i]);
   }
   free(cmd->args);
-}
-
-void free_pipeline(pipeline *pipe)
-{
-  for (int i = 0; i < pipe->nb_commands; i++)
-  {
-    free_command(pipe->commands[i]);
-  }
-  free(pipe->commands);
-  free(pipe);
 }
 
 // Libère un nœud d'AST
@@ -227,23 +209,11 @@ void free_ast_node(ast_node *node)
     free_ast_node(node->data.if_stmt.else_block);
     node->data.if_stmt.else_block = NULL;
     break;
-  case NODE_PIPELINE:
-    free_pipeline(&node->data.pipe);
-    node->data.pipe.commands = NULL;
-    break;
   default:
     break;
   }
   free(node);
   node = NULL;
-}
-
-pipeline *create_pipeline(command **commands, int nb_commands)
-{
-  pipeline *pipe = malloc(sizeof(pipeline));
-  pipe->commands = commands;
-  pipe->nb_commands = nb_commands;
-  return pipe;
 }
 
 redirection *create_redirection(char *file, int fd, int mode)

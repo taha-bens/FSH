@@ -23,13 +23,6 @@ typedef struct command
   int argc;
 } command;
 
-// Structure pour un pipeline
-typedef struct pipeline
-{
-  command **commands;
-  int nb_commands;
-} pipeline;
-
 // Structure pour une redirection
 typedef struct redirection
 {
@@ -69,7 +62,6 @@ typedef struct ast_node
   union
   {
     command cmd;
-    pipeline pipe;
     redirection redir;
     if_statement if_stmt;
     for_loop for_loop;
@@ -79,7 +71,7 @@ typedef struct ast_node
 // Fonctions pour créer des nœuds d'AST
 ast_node *create_ast_node(node_type type, char *value);
 ast_node *create_command_node(char **args, int argc);
-ast_node *create_pipeline_node(command **commands, int nb_commands);
+ast_node *create_pipeline_node(ast_node *first, ast_node *second);
 ast_node *create_if_node(ast_node *condition, ast_node *then_block, ast_node *else_block);
 ast_node *create_for_node(char *dir, char *variable, char **options, int show_all, int recursive, char *ext, char *type, int max_files, ast_node *block);
 ast_node *create_redirection_node(char *file, int fd, int mode);
@@ -89,11 +81,9 @@ void add_child(ast_node *parent, ast_node *child);
 
 // Fonctions pour libérer des nœuds d'AST
 void free_command(command *cmd);
-void free_pipeline(pipeline *pipe);
 void free_ast_node(ast_node *node);
 
 // Fonctions pour créer et libérer des structures spécifiques
-pipeline *create_pipeline(command **commands, int nb_commands);
 redirection *create_redirection(char *file, int fd, int mode);
 void free_redirection(redirection *red);
 

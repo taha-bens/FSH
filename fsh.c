@@ -55,6 +55,11 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
   while (tokens[*index] != NULL)
   {
 
+    if (strcmp(tokens[*index], "|") == 0)
+    {
+      break;
+    }
+
     if (strcmp(tokens[*index], "else") == 0)
     {
       // Normalement il faudrait ajouter une vérification pour voir si on a pas un else sans if
@@ -208,15 +213,49 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       // Créer la première commande dans le for
       ast_node *block = construct_ast_recursive(tokens, index);
       (*index)--;
-      // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
-      while (*index < end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      // Si il y a un point virgule ou un pipe c'est qu'il y a une autre commande après le bloc
+      while (*index < end && tokens[*index] && (strcmp(tokens[*index], ";") == 0 || strcmp(tokens[*index], "|") == 0))
       {
         (*index)++;
         ast_node *child = construct_ast_recursive(tokens, index);
         if (child != NULL)
         {
-          add_child(block, child);
-          (*index)--;
+          if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+          {
+            (*index)++;
+            // Construire le reste du pipeline
+            ast_node *second = construct_ast_recursive(tokens, index);
+            if (second == NULL)
+            {
+              free_ast_node(block);
+              free(variable);
+              return NULL;
+            }
+            ast_node *pipeline = create_pipeline_node(child, second);
+            // Ajouter les autres commandes au pipeline
+            while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+            {
+              (*index)++;
+              ast_node *child = construct_ast_recursive(tokens, index);
+              if (child != NULL)
+              {
+                pipeline = create_pipeline_node(pipeline, child);
+              }
+              else
+              {
+                free_ast_node(pipeline);
+                free_ast_node(block);
+                free(variable);
+                return NULL;
+              }
+            }
+            add_child(block, pipeline);
+          }
+          else
+          {
+            add_child(block, child);
+            (*index)--;
+          }
         }
         else
         {
@@ -315,6 +354,36 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
           ast_node *child = construct_ast_recursive(tokens, index);
           if (child != NULL)
           {
+            if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+            {
+              // Construire le reste du pipeline
+              (*index)++;
+              ast_node *second = construct_ast_recursive(tokens, index);
+              if (second == NULL)
+              {
+                free_ast_node(condition_node);
+                return NULL;
+              }
+              ast_node *pipeline = create_pipeline_node(child, second);
+              // Ajouter les autres commandes au pipeline
+              while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+              {
+                (*index)++;
+                ast_node *child = construct_ast_recursive(tokens, index);
+                if (child != NULL)
+                {
+                  pipeline = create_pipeline_node(pipeline, child);
+                }
+                else
+                {
+                  free_ast_node(pipeline);
+                  free_ast_node(condition_node);
+                  return NULL;
+                }
+              }
+              add_child(condition_node, pipeline);
+              continue;
+            }
             add_child(condition_node, child);
           }
           else
@@ -396,14 +465,48 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
       ast_node *then_block = construct_ast_recursive(tokens, index);
       // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
       (*index)--; // On a déjà incrémenté l'index
-      while (*index < then_end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
+      while (*index < then_end && tokens[*index])
       {
         (*index)++;
         ast_node *child = construct_ast_recursive(tokens, index);
         if (child != NULL)
         {
-          add_child(then_block, child);
-          (*index)--;
+          if (tokens[*index] && (strcmp(tokens[*index], "|")) == 0)
+          {
+            // Construire le reste du pipeline
+            (*index)++;
+            ast_node *second = construct_ast_recursive(tokens, index);
+            if (second == NULL)
+            {
+              free_ast_node(then_block);
+              free_ast_node(condition_node);
+              return NULL;
+            }
+            ast_node *pipeline = create_pipeline_node(child, second);
+            // Ajouter les autres commandes au pipeline
+            while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+            {
+              (*index)++;
+              ast_node *child = construct_ast_recursive(tokens, index);
+              if (child != NULL)
+              {
+                pipeline = create_pipeline_node(pipeline, child);
+              }
+              else
+              {
+                free_ast_node(pipeline);
+                free_ast_node(then_block);
+                free_ast_node(condition_node);
+                return NULL;
+              }
+            }
+            add_child(then_block, pipeline);
+          }
+          else
+          {
+            add_child(then_block, child);
+            (*index)--;
+          }
         }
         else
         {
@@ -452,14 +555,50 @@ ast_node *construct_ast_recursive(char **tokens, int *index)
         ast_node *else_block = construct_ast_recursive(tokens, index);
         // Si il y a un point virgule et qu'on a pas atteint la fin
         (*index)--; // On a déjà incrémenté l'index
-        while (*index < else_end && tokens[*index] && strcmp(tokens[*index], ";") == 0)
+        while (*index < else_end && tokens[*index])
         {
           (*index)++;
           ast_node *child = construct_ast_recursive(tokens, index);
           if (child != NULL)
           {
-            add_child(else_block, child);
-            (*index)--;
+            if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+            {
+              // Construire le reste du pipeline
+              (*index)++;
+              ast_node *second = construct_ast_recursive(tokens, index);
+              if (second == NULL)
+              {
+                free_ast_node(then_block);
+                free_ast_node(else_block);
+                free_ast_node(condition_node);
+                return NULL;
+              }
+              ast_node *pipeline = create_pipeline_node(child, second);
+              // Ajouter les autres commandes au pipeline
+              while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+              {
+                (*index)++;
+                ast_node *child = construct_ast_recursive(tokens, index);
+                if (child != NULL)
+                {
+                  pipeline = create_pipeline_node(pipeline, child);
+                }
+                else
+                {
+                  free_ast_node(pipeline);
+                  free_ast_node(then_block);
+                  free_ast_node(else_block);
+                  free_ast_node(condition_node);
+                  return NULL;
+                }
+              }
+              add_child(else_block, pipeline);
+            }
+            else
+            {
+              add_child(else_block, child);
+              (*index)--;
+            }
           }
           else
           {
@@ -717,7 +856,43 @@ ast_node *construct_ast(char *line)
     ast_node *child = construct_ast_recursive(tokens, &index);
     if (child != NULL)
     {
-      add_child(root, child);
+      // Vérifier si on a un pipe après la commande
+      if (tokens[index] != NULL && strcmp(tokens[index], "|") == 0)
+      {
+        index++;
+        // Construire le reste du pipeline
+        ast_node *second = construct_ast_recursive(tokens, &index);
+        if (second == NULL)
+        {
+          free_ast_node(root);
+          free_ast_node(child);
+          free_split(tokens);
+          return NULL;
+        }
+        ast_node *pipeline = create_pipeline_node(child, second);
+        // Ajouter les autres commandes au pipeline
+        while (tokens[index] != NULL && strcmp(tokens[index], "|") == 0)
+        {
+          index++;
+          ast_node *child = construct_ast_recursive(tokens, &index);
+          if (child != NULL)
+          {
+            pipeline = create_pipeline_node(pipeline, child);
+          }
+          else
+          {
+            free_ast_node(pipeline);
+            free_ast_node(root);
+            free_split(tokens);
+            return NULL;
+          }
+        }
+        add_child(root, pipeline);
+      }
+      else
+      {
+        add_child(root, child);
+      }
     }
     else
     {
@@ -965,7 +1140,8 @@ void execute_for(ast_node *node, int *last_return_value)
     }
   }
 
-  if (*last_return_value != 0){
+  if (*last_return_value != 0)
+  {
     *last_return_value = previous_return_value;
   }
 
@@ -1129,7 +1305,7 @@ void execute_command(ast_node *node, int *last_return_value)
         file_name = expanded;
         free(var_name);
       }
-      
+
       // Appliquer la redirection
       int fd = open(file_name, redir->mode, 0664);
       if (fd == -1)
