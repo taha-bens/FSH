@@ -32,7 +32,6 @@
 void execute_ast(ast_node *node, int *last_return_value);
 void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value);
 void create_prompt(char *prompt, const char *current_dir, int last_return_value);
-int handle_redirections(char **splited, int *last_return_value);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void cleanup_and_exit(int last_return_value, ast_node *tree);
 
