@@ -1519,11 +1519,93 @@ void execute_command(ast_node *node, int *last_return_value)
   restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
 }
 
+void execute_pipeline(ast_node *pipeline, int *last_return_value)
+{
+  int nb_cmds = pipeline->child_count;
+  int pipes[nb_cmds - 1][2];
+
+  for (int i = 0; i < nb_cmds - 1; i++)
+  {
+    if (pipe(pipes[i]) < 0)
+    {
+      perror("pipe");
+      *last_return_value = 1;
+      return;
+    }
+  }
+
+  for (int i = 0; i < nb_cmds; i++)
+  {
+    pid_t pid = fork();
+    if (pid < 0)
+    {
+      perror("fork");
+      *last_return_value = 1;
+      return;
+    }
+
+    if (pid == 0)
+    {
+      if (i > 0)
+      {
+        if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0)
+        {
+          perror("dup2");
+          exit(1);
+        }
+      }
+
+      if (i < nb_cmds - 1)
+      {
+        if (dup2(pipes[i][1], STDOUT_FILENO) < 0)
+        {
+          perror("dup2");
+          exit(1);
+        }
+      }
+
+      for (int j = 0; j < nb_cmds - 1; j++)
+      {
+        close(pipes[j][0]);
+        close(pipes[j][1]);
+      }
+
+      execute_ast(pipeline->children[i], last_return_value);
+      if (*last_return_value == 1 && i < nb_cmds - 1)
+      {
+        *last_return_value = 0; // On n'arrête pas le pipeline si une commande a échoué
+      }
+      exit(*last_return_value);
+    }
+  }
+
+  for (int i = 0; i < nb_cmds - 1; i++)
+  {
+    close(pipes[i][0]);
+    close(pipes[i][1]);
+  }
+
+  int status;
+  for (int i = 0; i < nb_cmds; i++)
+  {
+    wait(&status);
+    if (WIFEXITED(status))
+    {
+      *last_return_value = WEXITSTATUS(status);
+    }
+  }
+}
+
 void execute_ast(ast_node *node, int *last_return_value)
 {
   if (node == NULL)
   {
     return;
+  }
+
+  if (node->type == NODE_PIPELINE)
+  {
+    execute_pipeline(node, last_return_value);
   }
 
   if (node->type == NODE_IF)
@@ -1561,59 +1643,13 @@ void execute_ast(ast_node *node, int *last_return_value)
     execute_command(node, last_return_value);
   }
 
-  for (int i = 0; i < node->child_count; i++)
+  if (node->type != NODE_PIPELINE)
   {
-    execute_ast(node->children[i], last_return_value);
-  }
-}
-
-void execute_pipeline(ast_node *pipeline) {
-  int nb_cmds = pipeline->data.pipe.nb_commands;
-  int pipes[nb_cmds - 1][2];
-
-  for (int i = 0; i < nb_cmds - 1; i++) {
-    if (pipe(pipes[i]) < 0) {
-      perror("pipe");
+    for (int i = 0; i < node->child_count; i++)
+    {
+      execute_ast(node->children[i], last_return_value);
     }
   }
-
-  for (int i = 0; i < nb_cmds; i++) {
-    pid_t pid = fork();
-    if (pid < 0) {
-      perror("fork");
-    }
-
-    if (pid == 0) {
-      if (i > 0) {
-        if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
-          perror("dup2");
-        }
-      }
-
-      if (i < nb_cmds - 1) {
-        if (dup2(pipes[i][1], STDOUT_FILENO) < 0) {
-          perror("dup2");
-        }
-      }
-
-      for (int j = 0; j < nb_cmds - 1; j++) {
-        close(pipes[j][0]);
-        close(pipes[j][1]);
-      }
-
-      command **cmds = pipeline->data.pipe.commands;
-      command *cmd = cmds[i];
-      execvp(cmd->args[0], cmd->args);
-      perror("execvp");
-    }
-  }
-
-  for (int i = 0; i < nb_cmds - 1; i++) {
-    close(pipes[i][0]);
-    close(pipes[i][1]);
-  }
-
-  wait(NULL);
 }
 
 int main()
