@@ -567,6 +567,117 @@ ast_node *parse_if(char **tokens, int *index)
   }
 }
 
+ast_node *check_redirection(char **tokens, int *index, ast_node *node)
+{
+  ast_node *redirection = NULL;
+  if (strcmp(tokens[*index], ">") == 0)
+  {
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, ">: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    if (access(tokens[*index], F_OK) == 0)
+    {
+      fprintf(stderr, "pipeline_run: File exists\n");
+      return NULL;
+    }
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], ">>") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, ">>: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_APPEND);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], "<") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, "<: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDIN_FILENO, O_RDONLY);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], "2>") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, "2>: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    if (access(tokens[*index], F_OK) == 0)
+    {
+      fprintf(stderr, "pipeline_run: File exists\n");
+      return NULL;
+    }
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], "2>>") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, "2>>: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_APPEND);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], "2>|") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, "2>|: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
+    (*index)++;
+  }
+  else if (strcmp(tokens[*index], ">|") == 0)
+  {
+    // Vérifier la syntaxe
+    if (tokens[*index + 1] == NULL)
+    {
+      fprintf(stderr, ">|: Invalid syntax\n");
+      return NULL;
+    }
+    (*index)++;
+    // Créer le nœud de redirection
+    redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
+    (*index)++;
+  }
+  else
+  {
+    fprintf(stderr, "Unknown redirection\n");
+    return NULL;
+  }
+  return redirection;
+}
+
 ast_node *parse_command(char **tokens, int *index)
 {
   int argc = 0;
@@ -601,127 +712,18 @@ ast_node *parse_command(char **tokens, int *index)
   ast_node *redirection = NULL;
   while (tokens[*index] != NULL && is_redirection_char(tokens[*index]))
   {
-    if (strcmp(tokens[*index], ">") == 0)
-    {
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, ">: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      if (access(tokens[*index], F_OK) == 0)
-      {
-        fprintf(stderr, "pipeline_run: File exists\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], ">>") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, ">>: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_APPEND);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], "<") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, "<: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDIN_FILENO, O_RDONLY);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], "2>") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, "2>: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      if (access(tokens[*index], F_OK) == 0)
-      {
-        fprintf(stderr, "pipeline_run: File exists\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], "2>>") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, "2>>: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_APPEND);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], "2>|") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, "2>|: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDERR_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
-      (*index)++;
-    }
-    else if (strcmp(tokens[*index], ">|") == 0)
-    {
-      // Vérifier la syntaxe
-      if (tokens[*index + 1] == NULL)
-      {
-        fprintf(stderr, ">|: Invalid syntax\n");
-        free_ast_node(node);
-        return NULL;
-      }
-      (*index)++;
-      // Créer le nœud de redirection
-      redirection = create_redirection_node(tokens[*index], STDOUT_FILENO, O_WRONLY | O_CREAT | O_TRUNC);
-      (*index)++;
-    }
-    else
-    {
-      fprintf(stderr, "Unknown redirection\n");
-      free_ast_node(node);
-      return NULL;
-    }
+    redirection = check_redirection(tokens, index, node);
 
     // Ajouter la redirection à la commande
     if (redirection != NULL)
     {
       add_child(node, redirection);
       redirection = NULL;
+    }
+    else
+    {
+      free_ast_node(node);
+      return NULL;
     }
   }
 
@@ -813,67 +815,6 @@ ast_node *construct_ast_rec(char **tokens, int *index)
   return node;
 }
 
-void print_ast_with_depth(ast_node *node, int depth)
-{
-  if (node == NULL)
-  {
-    return;
-  }
-
-  printf("%d :", depth);
-
-  switch (node->type)
-  {
-  case NODE_COMMAND:
-    for (int i = 0; i < node->data.cmd.argc; i++)
-    {
-      printf("%s ", node->data.cmd.args[i]);
-    }
-    break;
-  case NODE_SEQUENCE:
-    printf("Sequence\n");
-    break;
-  case NODE_PIPELINE:
-    printf("Pipeline\n");
-    break;
-  case NODE_REDIRECTION:
-    printf("Redirection%s\n", node->data.redir.mode == O_WRONLY ? " (write)" : " (read)");
-    break;
-  case NODE_FOR_LOOP:
-    printf("For loop\n");
-    break;
-  case NODE_IF:
-    if (node->data.if_stmt.then_block != NULL)
-    {
-      for (int i = 0; i < node->data.if_stmt.then_block->data.cmd.argc; i++)
-      {
-        printf("%s ", node->data.if_stmt.then_block->data.cmd.args[i]);
-      }
-    }
-    if (node->data.if_stmt.else_block != NULL)
-    {
-      for (int i = 0; i < node->data.if_stmt.else_block->data.cmd.argc; i++)
-      {
-        printf("%s ", node->data.if_stmt.else_block->data.cmd.args[i]);
-      }
-    }
-    break;
-  default:
-    printf("Unknown node type\n");
-    break;
-  }
-
-  for (int i = 0; i < node->child_count; i++)
-  {
-    print_ast_with_depth(node->children[i], depth + 1);
-  }
-}
-
-void print_ast(ast_node *node)
-{
-  print_ast_with_depth(node, 0);
-}
-
 // Fonction principale pour construire l'AST
 ast_node *construct_ast(char *line)
 {
@@ -938,13 +879,12 @@ ast_node *construct_ast(char *line)
   return root;
 }
 
-void execute_for(ast_node *node, int *last_return_value)
+char *substitute_variables(const char *str, int *last_return_value)
 {
-  for_loop *loop = &node->data.for_loop;
-  // Vérifier que dir est une variable cad qu'elle contient un $ ds cas essayer de substituer la variable
-  char *dollar_pos = strchr(loop->dir, '$');
-  char *original_dir = strdup(loop->dir);
-  if (dollar_pos != NULL)
+  char *result = strdup(str);
+  char *dollar_pos = strchr(result, '$');
+
+  while (dollar_pos != NULL)
   {
     // On a un $ on doit faire une substitution
     // Les variables ne sont qu'une lettre
@@ -957,27 +897,48 @@ void execute_for(ast_node *node, int *last_return_value)
       fprintf(stderr, "Variable %s not set\n", var_name);
       *last_return_value = 1;
       free(var_name);
-      return;
+      free(result);
+      return NULL;
     }
     // On a la valeur de la variable on peut la remplacer
-    size_t expanded_len = strlen(loop->dir) + strlen(var_value) - 1;
+    size_t expanded_len = strlen(result) + strlen(var_value) - 1;
     char *expanded = malloc(expanded_len + 1);
     if (expanded == NULL)
     {
       perror("malloc");
       *last_return_value = 1;
       free(var_name);
-      return;
+      free(result);
+      return NULL;
     }
     char *suffix = dollar_pos + 1;
-    strncpy(expanded, loop->dir, dollar_pos - loop->dir);
-    expanded[dollar_pos - loop->dir] = '\0';
+    strncpy(expanded, result, dollar_pos - result);
+    expanded[dollar_pos - result] = '\0';
     strcat(expanded, var_value);
     strcat(expanded, suffix + 1);
-    free(loop->dir);
-    loop->dir = expanded;
+    free(result);
+    result = expanded;
     free(var_name);
+
+    // Rechercher la prochaine occurrence de $
+    dollar_pos = strchr(result, '$');
   }
+
+  return result;
+}
+
+void execute_for(ast_node *node, int *last_return_value)
+{
+  for_loop *loop = &node->data.for_loop;
+  char *original_dir = strdup(loop->dir);
+  char *substituted_dir = substitute_variables(loop->dir, last_return_value);
+  if (substituted_dir == NULL)
+  {
+    free(original_dir);
+    return;
+  }
+  free(loop->dir);
+  loop->dir = substituted_dir;
   struct stat path_stat;
   if (stat(loop->dir, &path_stat) == -1)
   {
@@ -1198,58 +1159,25 @@ void execute_for(ast_node *node, int *last_return_value)
 
 void handle_substitution(command *cmd, char **copy_args, int *last_return_value)
 {
-  // Regarder dans args si on a pas une substitution de variable à faire
   for (int i = 0; i < cmd->argc; i++)
   {
-    // Regarder chaque chaines de caractères pour voir si on a un $
-    char *dollar_pos = strchr(cmd->args[i], '$');
-    while (dollar_pos != NULL)
+    char *substituted = substitute_variables(cmd->args[i], last_return_value);
+    if (substituted == NULL)
     {
-      // On a un $ on doit faire une substitution
-      // Les variables ne sont qu'une lettre
-      char *var_name = malloc(2);
-      strncpy(var_name, dollar_pos + 1, 1);
-      var_name[1] = '\0';
-      char *var_value = getenv(var_name);
-      if (var_value == NULL)
+      for (int j = 0; j < cmd->argc; j++)
       {
-        fprintf(stderr, "Variable %s not set\n", var_name);
-        *last_return_value = 1;
-        for (int j = 0; j < cmd->argc; j++)
-        {
-          free(cmd->args[j]);
-          cmd->args[j] = strdup(copy_args[j]);
-        }
-        for (int j = 0; j < cmd->argc; j++)
-        {
-          free(copy_args[j]);
-        }
-        free(copy_args);
-        free(var_name);
-        return;
+        free(cmd->args[j]);
+        cmd->args[j] = strdup(copy_args[j]);
       }
-      // On a la valeur de la variable on peut la remplacer
-      size_t expanded_len = strlen(cmd->args[i]) + strlen(var_value) - 1;
-      char *expanded = malloc(expanded_len + 1);
-      if (expanded == NULL)
+      for (int j = 0; j < cmd->argc; j++)
       {
-        perror("malloc");
-        *last_return_value = 1;
-        free(var_name);
-        return;
+        free(copy_args[j]);
       }
-      char *suffix = dollar_pos + 1;
-      strncpy(expanded, cmd->args[i], dollar_pos - cmd->args[i]);
-      expanded[dollar_pos - cmd->args[i]] = '\0';
-      strcat(expanded, var_value);
-      strcat(expanded, suffix + 1);
-      free(cmd->args[i]);
-      cmd->args[i] = expanded;
-      free(var_name);
-
-      // Rechercher la prochaine occurrence de $
-      dollar_pos = strchr(cmd->args[i], '$');
+      free(copy_args);
+      return;
     }
+    free(cmd->args[i]);
+    cmd->args[i] = substituted;
   }
 }
 
@@ -1270,106 +1198,57 @@ void execute_command(ast_node *node, int *last_return_value)
   int saved_stdout = dup(STDOUT_FILENO);
   int saved_stderr = dup(STDERR_FILENO);
 
-  int i = 0;
-
   // Appliquer si elle existe plusieurs redirections sur la commande
-  while (i < node->child_count)
+  for (int i = 0; i < node->child_count; i++)
   {
     if (node->children[i]->type == NODE_REDIRECTION)
     {
       redirection *redir = &node->children[i]->data.redir;
-      char *file_name = redir->file;
-      // Vérifier si il n'y a pas de substitution à faire pour le nom du fichier
-      char *dollar_pos = strchr(file_name, '$');
-      if (dollar_pos != NULL)
+      char *file_name = substitute_variables(redir->file, last_return_value);
+      if (file_name == NULL)
       {
-        // On a un $ on doit faire une substitution
-        // Les variables ne sont qu'une lettre
-        char *var_name = malloc(2);
-        strncpy(var_name, dollar_pos + 1, 1);
-        var_name[1] = '\0';
-        char *var_value = getenv(var_name);
-        if (var_value == NULL)
-        {
-          fprintf(stderr, "Variable %s not set\n", var_name);
-          *last_return_value = 1;
-          restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(cmd->args[i]);
-            cmd->args[i] = strdup(copy_args[i]);
-          }
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(copy_args[i]);
-          }
-          free(copy_args);
-          free(var_name);
-          return;
-        }
-        // On a la valeur de la variable on peut la remplacer
-        size_t expanded_len = strlen(file_name) + strlen(var_value) - 1;
-        char *expanded = malloc(expanded_len + 1);
-        if (expanded == NULL)
-        {
-          perror("malloc");
-          *last_return_value = 1;
-          restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(cmd->args[i]);
-            cmd->args[i] = strdup(copy_args[i]);
-          }
-          for (int i = 0; i < cmd->argc; i++)
-          {
-            free(copy_args[i]);
-          }
-          free(copy_args);
-          free(var_name);
-          return;
-        }
-        char *suffix = dollar_pos + 1;
-        strncpy(expanded, file_name, dollar_pos - file_name);
-        expanded[dollar_pos - file_name] = '\0';
-        strcat(expanded, var_value);
-        strcat(expanded, suffix + 1);
-        file_name = expanded;
-        free(var_name);
-      }
-
-      // Appliquer la redirection
-      int fd = open(file_name, redir->mode, 0664);
-      if (fd == -1)
-      {
-        perror("open");
-        *last_return_value = 1;
         restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
-        for (int i = 0; i < cmd->argc; i++)
+        for (int j = 0; j < cmd->argc; j++)
         {
-          free(cmd->args[i]);
-          cmd->args[i] = strdup(copy_args[i]);
+          free(cmd->args[j]);
+          cmd->args[j] = strdup(copy_args[j]);
         }
-        for (int i = 0; i < cmd->argc; i++)
+        for (int j = 0; j < cmd->argc; j++)
         {
-          free(copy_args[i]);
+          free(copy_args[j]);
         }
         free(copy_args);
         return;
       }
 
-      // Rediriger la sortie standard
+      int fd = open(file_name, redir->mode, 0664);
+      free(file_name);
+      if (fd == -1)
+      {
+        perror("open");
+        *last_return_value = 1;
+        restore_standard_fds(saved_stdin, saved_stdout, saved_stderr);
+        for (int j = 0; j < cmd->argc; j++)
+        {
+          free(cmd->args[j]);
+          cmd->args[j] = strdup(copy_args[j]);
+        }
+        for (int j = 0; j < cmd->argc; j++)
+        {
+          free(copy_args[j]);
+        }
+        free(copy_args);
+        return;
+      }
+
       if (redir->fd == STDOUT_FILENO)
       {
         dup2(fd, STDOUT_FILENO);
       }
-
-      // Rediriger la sortie d'erreur
       if (redir->fd == STDERR_FILENO)
       {
         dup2(fd, STDERR_FILENO);
       }
-
-      // Rediriger l'entrée standard
       if (redir->fd == STDIN_FILENO)
       {
         dup2(fd, STDIN_FILENO);
@@ -1377,7 +1256,6 @@ void execute_command(ast_node *node, int *last_return_value)
 
       close(fd);
     }
-    i++;
   }
 
   if (strcmp(cmd->args[0], "exit") == 0)
