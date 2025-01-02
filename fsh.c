@@ -47,6 +47,49 @@ int is_redirection_char(char *c)
   return strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0;
 }
 
+ast_node *construct_pipeline_and_add_child(char **tokens, int *index, ast_node *block)
+{
+  ast_node *child = construct_ast_rec(tokens, index);
+  if (child == NULL)
+  {
+    return NULL;
+  }
+
+  if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+  {
+    (*index)++;
+    ast_node *second = construct_ast_rec(tokens, index);
+    if (second == NULL)
+    {
+      free_ast_node(child);
+      return NULL;
+    }
+    ast_node *pipeline = create_pipeline_node(child, second);
+    while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+    {
+      (*index)++;
+      ast_node *next_child = construct_ast_rec(tokens, index);
+      if (next_child != NULL)
+      {
+        pipeline = create_pipeline_node(pipeline, next_child);
+      }
+      else
+      {
+        free_ast_node(pipeline);
+        return NULL;
+      }
+    }
+    add_child(block, pipeline);
+  }
+  else
+  {
+    add_child(block, child);
+    (*index)--;
+  }
+
+  return block;
+}
+
 ast_node *parse_for_loop(char **tokens, int *index)
 {
   // Vérifier la syntaxe le premier argument est nécessairement le nom de la variable
@@ -158,50 +201,10 @@ ast_node *parse_for_loop(char **tokens, int *index)
   ast_node *block = construct_ast_rec(tokens, index);
   (*index)--;
   // Si il y a un point virgule ou un pipe c'est qu'il y a une autre commande après le bloc
-  while (*index < end && tokens[*index] && (strcmp(tokens[*index], ";") == 0 || strcmp(tokens[*index], "|") == 0))
+  while (*index < end)
   {
     (*index)++;
-    ast_node *child = construct_ast_rec(tokens, index);
-    if (child != NULL)
-    {
-      if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
-      {
-        (*index)++;
-        // Construire le reste du pipeline
-        ast_node *second = construct_ast_rec(tokens, index);
-        if (second == NULL)
-        {
-          free_ast_node(block);
-          free(variable);
-          return NULL;
-        }
-        ast_node *pipeline = create_pipeline_node(child, second);
-        // Ajouter les autres commandes au pipeline
-        while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
-        {
-          (*index)++;
-          ast_node *child = construct_ast_rec(tokens, index);
-          if (child != NULL)
-          {
-            pipeline = create_pipeline_node(pipeline, child);
-          }
-          else
-          {
-            free_ast_node(pipeline);
-            free_ast_node(block);
-            free(variable);
-            return NULL;
-          }
-        }
-        add_child(block, pipeline);
-      }
-      else
-      {
-        add_child(block, child);
-        (*index)--;
-      }
-    }
-    else
+    if (construct_pipeline_and_add_child(tokens, index, block) == NULL)
     {
       free_ast_node(block);
       free(variable);
@@ -297,6 +300,7 @@ ast_node *parse_if(char **tokens, int *index)
     // Aller chercher la condition qui est une succession de commandes jusqu'à l'accolade ouvrante
     while (*index < end)
     {
+
       ast_node *child = construct_ast_rec(tokens, index);
       if (child != NULL)
       {
@@ -411,50 +415,10 @@ ast_node *parse_if(char **tokens, int *index)
   ast_node *then_block = construct_ast_rec(tokens, index);
   // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
   (*index)--; // On a déjà incrémenté l'index
-  while (*index < then_end && tokens[*index])
+  while (*index < then_end)
   {
     (*index)++;
-    ast_node *child = construct_ast_rec(tokens, index);
-    if (child != NULL)
-    {
-      if (tokens[*index] && (strcmp(tokens[*index], "|")) == 0)
-      {
-        // Construire le reste du pipeline
-        (*index)++;
-        ast_node *second = construct_ast_rec(tokens, index);
-        if (second == NULL)
-        {
-          free_ast_node(then_block);
-          free_ast_node(condition_node);
-          return NULL;
-        }
-        ast_node *pipeline = create_pipeline_node(child, second);
-        // Ajouter les autres commandes au pipeline
-        while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
-        {
-          (*index)++;
-          ast_node *child = construct_ast_rec(tokens, index);
-          if (child != NULL)
-          {
-            pipeline = create_pipeline_node(pipeline, child);
-          }
-          else
-          {
-            free_ast_node(pipeline);
-            free_ast_node(then_block);
-            free_ast_node(condition_node);
-            return NULL;
-          }
-        }
-        add_child(then_block, pipeline);
-      }
-      else
-      {
-        add_child(then_block, child);
-        (*index)--;
-      }
-    }
-    else
+    if (construct_pipeline_and_add_child(tokens, index, then_block) == NULL)
     {
       free_ast_node(then_block);
       free_ast_node(condition_node);
@@ -501,56 +465,14 @@ ast_node *parse_if(char **tokens, int *index)
     ast_node *else_block = construct_ast_rec(tokens, index);
     // Si il y a un point virgule et qu'on a pas atteint la fin
     (*index)--; // On a déjà incrémenté l'index
-    while (*index < else_end && tokens[*index])
+    while (*index < else_end)
     {
       (*index)++;
-      ast_node *child = construct_ast_rec(tokens, index);
-      if (child != NULL)
-      {
-        if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
-        {
-          // Construire le reste du pipeline
-          (*index)++;
-          ast_node *second = construct_ast_rec(tokens, index);
-          if (second == NULL)
-          {
-            free_ast_node(then_block);
-            free_ast_node(else_block);
-            free_ast_node(condition_node);
-            return NULL;
-          }
-          ast_node *pipeline = create_pipeline_node(child, second);
-          // Ajouter les autres commandes au pipeline
-          while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
-          {
-            (*index)++;
-            ast_node *child = construct_ast_rec(tokens, index);
-            if (child != NULL)
-            {
-              pipeline = create_pipeline_node(pipeline, child);
-            }
-            else
-            {
-              free_ast_node(pipeline);
-              free_ast_node(then_block);
-              free_ast_node(else_block);
-              free_ast_node(condition_node);
-              return NULL;
-            }
-          }
-          add_child(else_block, pipeline);
-        }
-        else
-        {
-          add_child(else_block, child);
-          (*index)--;
-        }
-      }
-      else
+      if (construct_pipeline_and_add_child(tokens, index, else_block) == NULL)
       {
         free_ast_node(then_block);
-        free_ast_node(else_block);
         free_ast_node(condition_node);
+        free_ast_node(else_block);
         return NULL;
       }
     }
@@ -565,6 +487,7 @@ ast_node *parse_if(char **tokens, int *index)
     (*index) = then_end + 1;
     return node;
   }
+  return NULL;
 }
 
 ast_node *check_redirection(char **tokens, int *index, ast_node *node)
