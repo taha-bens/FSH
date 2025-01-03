@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <stdbool.h>
+#include <signal.h>
 
 #include <readline/history.h>
 #include <readline/readline.h>
@@ -29,10 +30,12 @@
 #define SIZE_PWDBUF 1024
 #define PATH_MAX 4096
 
+volatile sig_atomic_t signal_received = 0;
+
 ast_node *construct_ast_rec(char **tokens, int *index);
 void execute_ast(ast_node *node, int *last_return_value);
-void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value);
-void create_prompt(char *prompt, const char *current_dir, int last_return_value);
+void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value, int sigint_received);
+void create_prompt(char *prompt, const char *current_dir, int last_return_value, int sigint_received);
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void cleanup_and_exit(int last_return_value, ast_node *tree);
 
@@ -1024,7 +1027,7 @@ void execute_for(ast_node *node, int *last_return_value)
 
     execute_ast(loop->block, last_return_value);
 
-    if (*last_return_value == 1)
+    if (*last_return_value == 1 || signal_received != 0)
     {
       // Quitter la boucle si une commande a échoué
       // Libérer la mémoire allouée pour les fichiers
@@ -1342,6 +1345,21 @@ void execute_command(ast_node *node, int *last_return_value)
           *last_return_value %= 256; // Normaliser dans la plage [0, 255]
         }
       }
+      else if (WIFSIGNALED(status))
+      {
+        *last_return_value = 255;
+        signal_received = 1;
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(cmd->args[i]);
+          cmd->args[i] = strdup(copy_args[i]);
+        }
+        for (int i = 0; i < cmd->argc; i++)
+        {
+          free(copy_args[i]);
+        }
+        free(copy_args);
+      }
       else
       {
         *last_return_value = 1; // Erreur par défaut
@@ -1404,9 +1422,10 @@ void execute_pipeline(ast_node *pipeline, int *last_return_value)
       }
 
       execute_ast(pipeline->children[i], last_return_value);
-      if (*last_return_value == 1 && i < nb_cmds - 1)
+      if (signal_received == 1 && i < nb_cmds - 1)
       {
-        *last_return_value = 0; // On n'arrête pas le pipeline si une commande a échoué
+        signal_received = 0;
+        *last_return_value = 0; // On n'arrête pas le pipeline si une commande a été interrompue
       }
       exit(*last_return_value);
     }
@@ -1476,7 +1495,7 @@ void execute_ast(ast_node *node, int *last_return_value)
     execute_command(node, last_return_value);
   }
 
-  if (node->type != NODE_PIPELINE)
+  if (node->type != NODE_PIPELINE && signal_received == 0)
   {
     for (int i = 0; i < node->child_count; i++)
     {
@@ -1485,28 +1504,61 @@ void execute_ast(ast_node *node, int *last_return_value)
   }
 }
 
+void handle_sigint(int sig)
+{
+  signal_received = 1;
+}
+
+void handle_sigterm(int sig)
+{
+  // Ne rien faire
+}
+
 int main()
 {
   int last_return_value = 0;
   char formatted_prompt[MAX_LENGTH_PROMPT];
   char *line;
 
+  // Gerer les signaux
+  signal(SIGTERM, handle_sigterm);
+  signal(SIGINT, handle_sigint);
+
   rl_outstream = stderr;
 
   while (1)
   {
-    char *current_dir = chemin_du_repertoire();
-    if (current_dir == NULL)
+    if (signal_received)
     {
-      perror("chemin_du_repertoire");
-      return 1;
+      last_return_value = 255;
+      signal_received = 0;
+      char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
+      char *current_dir = chemin_du_repertoire();
+      if (current_dir == NULL)
+      {
+        perror("chemin_du_repertoire");
+        return 1;
+      }
+      create_dir_prompt_name(prompt_dir, current_dir, last_return_value, 1);
+      create_prompt(formatted_prompt, prompt_dir, last_return_value, 1);
+      free(current_dir);
+      free(prompt_dir);
     }
+    else
+    {
+      char *current_dir = chemin_du_repertoire();
+      if (current_dir == NULL)
+      {
+        perror("chemin_du_repertoire");
+        return 1;
+      }
 
-    char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
-    create_dir_prompt_name(prompt_dir, current_dir, last_return_value);
-    create_prompt(formatted_prompt, prompt_dir, last_return_value);
-    free(current_dir);
-    free(prompt_dir);
+      char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
+      create_dir_prompt_name(prompt_dir, current_dir, last_return_value, 0);
+      create_prompt(formatted_prompt, prompt_dir, last_return_value, 0);
+      free(current_dir);
+      free(prompt_dir);
+    }
 
     line = readline(formatted_prompt);
     if (line == NULL)
@@ -1546,7 +1598,7 @@ int main()
   return 0;
 }
 
-void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value)
+void create_dir_prompt_name(char *prompt, const char *current_dir, int last_return_value, int sigint_received)
 {
   // Technique attroce pour calculer le nombre de chiffres dans un nombre...
   int number_of_digits = 1;
@@ -1560,7 +1612,13 @@ void create_dir_prompt_name(char *prompt, const char *current_dir, int last_retu
       number_of_digits++;
     }
   }
-  if (strlen(current_dir) > 23 - number_of_digits)
+  if (sigint_received)
+  {
+    number_of_digits = 3;
+    snprintf(prompt, MAX_LENGTH_PROMPT, "...%s", current_dir + strlen(current_dir) - 23 + number_of_digits);
+    return;
+  }
+  else if (strlen(current_dir) > 23 - number_of_digits)
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "...%s", current_dir + strlen(current_dir) - 23 + number_of_digits);
   }
@@ -1570,8 +1628,13 @@ void create_dir_prompt_name(char *prompt, const char *current_dir, int last_retu
   }
 }
 
-void create_prompt(char *prompt, const char *current_dir, int last_return_value)
+void create_prompt(char *prompt, const char *current_dir, int last_return_value, int sigint_received)
 {
+  if (sigint_received)
+  {
+    snprintf(prompt, MAX_LENGTH_PROMPT, "[SIG]%s$ ", current_dir);
+  }
+  else
   if (last_return_value != 1)
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "[%d]%s$ ", last_return_value,
