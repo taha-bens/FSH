@@ -31,6 +31,8 @@
 #define PATH_MAX 4096
 
 volatile sig_atomic_t signal_received = 0;
+volatile sig_atomic_t sigint_received = 0;
+volatile sig_atomic_t in_exec = 0;
 
 ast_node *construct_ast_rec(char **tokens, int *index);
 void execute_ast(ast_node *node, int *last_return_value);
@@ -1027,7 +1029,7 @@ void execute_for(ast_node *node, int *last_return_value)
 
     execute_ast(loop->block, last_return_value);
 
-    if (*last_return_value == 1 || signal_received != 0)
+    if (*last_return_value == 1 || sigint_received)
     {
       // Quitter la boucle si une commande a échoué
       // Libérer la mémoire allouée pour les fichiers
@@ -1050,6 +1052,7 @@ void execute_for(ast_node *node, int *last_return_value)
       unsetenv(loop->variable);
       return;
     }
+    signal_received = 0;
 
     // Faire le max entre le retour de la commande et le retour précédent
     if (*last_return_value > previous_return_value)
@@ -1345,9 +1348,10 @@ void execute_command(ast_node *node, int *last_return_value)
           *last_return_value %= 256; // Normaliser dans la plage [0, 255]
         }
       }
-      else if (WIFSIGNALED(status))
+      // Regarder si on a recu sigint
+      else if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT)
       {
-        *last_return_value = 255;
+        sigint_received = 1;
         signal_received = 1;
         for (int i = 0; i < cmd->argc; i++)
         {
@@ -1359,6 +1363,10 @@ void execute_command(ast_node *node, int *last_return_value)
           free(copy_args[i]);
         }
         free(copy_args);
+      }
+      else if (WIFSIGNALED(status) && WTERMSIG(status) != SIGINT){
+        // Continuer le programme si on a reçu un signal autre que SIGINT
+        signal_received = 1;
       }
       else
       {
@@ -1455,6 +1463,11 @@ void execute_ast(ast_node *node, int *last_return_value)
     return;
   }
 
+  if (sigint_received)
+  {
+    return;
+  }
+
   if (node->type == NODE_PIPELINE)
   {
     execute_pipeline(node, last_return_value);
@@ -1495,10 +1508,15 @@ void execute_ast(ast_node *node, int *last_return_value)
     execute_command(node, last_return_value);
   }
 
-  if (node->type != NODE_PIPELINE && signal_received == 0)
+  if (node->type != NODE_PIPELINE && sigint_received == 0)
   {
     for (int i = 0; i < node->child_count; i++)
     {
+      if (sigint_received)
+      {
+        return;
+      }
+      signal_received = 0;
       execute_ast(node->children[i], last_return_value);
     }
   }
@@ -1507,11 +1525,14 @@ void execute_ast(ast_node *node, int *last_return_value)
 void handle_sigint(int sig)
 {
   signal_received = 1;
+  sigint_received = 1;
 }
 
 void handle_sigterm(int sig)
 {
-  // Ne rien faire
+  if(in_exec){
+    signal_received = 1;
+  }
 }
 
 int main()
@@ -1520,9 +1541,14 @@ int main()
   char formatted_prompt[MAX_LENGTH_PROMPT];
   char *line;
 
-  // Gerer les signaux
-  signal(SIGTERM, handle_sigterm);
-  signal(SIGINT, handle_sigint);
+  // Gerer les signaux avec sigaction
+  struct sigaction sa;
+  sa.sa_handler = handle_sigterm;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGTERM, &sa, NULL);
+  sa.sa_handler = handle_sigint;
+  sigaction(SIGINT, &sa, NULL);
 
   rl_outstream = stderr;
 
@@ -1532,6 +1558,7 @@ int main()
     {
       last_return_value = 255;
       signal_received = 0;
+      sigint_received = 0;
       char *prompt_dir = malloc(MAX_LENGTH_PROMPT);
       char *current_dir = chemin_du_repertoire();
       if (current_dir == NULL)
@@ -1546,6 +1573,7 @@ int main()
     }
     else
     {
+      sigint_received = 0;
       char *current_dir = chemin_du_repertoire();
       if (current_dir == NULL)
       {
@@ -1560,7 +1588,9 @@ int main()
       free(prompt_dir);
     }
 
+    in_exec = 0;
     line = readline(formatted_prompt);
+    in_exec = 1;
     if (line == NULL)
     {
       exit(last_return_value);
@@ -1634,8 +1664,7 @@ void create_prompt(char *prompt, const char *current_dir, int last_return_value,
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "[SIG]%s$ ", current_dir);
   }
-  else
-  if (last_return_value != 1)
+  else if (last_return_value != 1)
   {
     snprintf(prompt, MAX_LENGTH_PROMPT, "[%d]%s$ ", last_return_value,
              current_dir);
