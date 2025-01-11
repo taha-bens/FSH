@@ -54,49 +54,6 @@ int is_redirection_char(char *c)
   return strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0;
 }
 
-ast_node *construct_pipeline_and_add_child(char **tokens, int *index, ast_node *block)
-{
-  ast_node *child = construct_ast_rec(tokens, index);
-  if (child == NULL)
-  {
-    return NULL;
-  }
-
-  if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
-  {
-    (*index)++;
-    ast_node *second = construct_ast_rec(tokens, index);
-    if (second == NULL)
-    {
-      free_ast_node(child);
-      return NULL;
-    }
-    ast_node *pipeline = create_pipeline_node(child, second);
-    while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
-    {
-      (*index)++;
-      ast_node *next_child = construct_ast_rec(tokens, index);
-      if (next_child != NULL)
-      {
-        pipeline = create_pipeline_node(pipeline, next_child);
-      }
-      else
-      {
-        free_ast_node(pipeline);
-        return NULL;
-      }
-    }
-    add_child(block, pipeline);
-  }
-  else
-  {
-    add_child(block, child);
-    (*index)--;
-  }
-
-  return block;
-}
-
 ast_node *parse_for_loop(char **tokens, int *index)
 {
   // Vérifier la syntaxe le premier argument est nécessairement le nom de la variable
@@ -154,6 +111,13 @@ ast_node *parse_for_loop(char **tokens, int *index)
     }
     else if (strcmp(tokens[*index], "-p") == 0 && tokens[*index + 1])
     {
+      // Vérifier qu'on a bien un nombre après l'option
+      if (isdigit(tokens[*index + 1][0]) == 0)
+      {
+        fprintf(stderr, "for: Invalid syntax\n");
+        free(variable);
+        return NULL;
+      }
       max_files = atoi(tokens[++(*index)]);
     }
     options = realloc(options, (options_len + 1) * sizeof(char *));
@@ -204,17 +168,49 @@ ast_node *parse_for_loop(char **tokens, int *index)
     }
   }
   (*index)++;
-  // Créer la première commande dans le for
-  ast_node *block = construct_ast_rec(tokens, index);
-  (*index)--;
+  // Construire le bloc
+  ast_node *block = create_ast_node(NODE_SEQUENCE, "BLOCK");
   // Si il y a un point virgule ou un pipe c'est qu'il y a une autre commande après le bloc
   while (*index < end)
   {
-    (*index)++;
-    if (construct_pipeline_and_add_child(tokens, index, block) == NULL)
+    ast_node *child = construct_ast_rec(tokens, index);
+    if (child != NULL)
+    {
+      if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+      {
+        // Construire le reste du pipeline
+        (*index)++;
+        ast_node *second = construct_ast_rec(tokens, index);
+        if (second == NULL)
+        {
+          free_ast_node(child);
+          return NULL;
+        }
+        ast_node *pipeline = create_pipeline_node(child, second);
+        // Ajouter les autres commandes au pipeline
+        while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+        {
+          (*index)++;
+          ast_node *child = construct_ast_rec(tokens, index);
+          if (child != NULL)
+          {
+            pipeline = create_pipeline_node(pipeline, child);
+          }
+          else
+          {
+            free_ast_node(pipeline);
+            free_ast_node(block);
+            return NULL;
+          }
+        }
+        add_child(block, pipeline);
+        continue;
+      }
+      add_child(block, child);
+    }
+    else
     {
       free_ast_node(block);
-      free(variable);
       return NULL;
     }
   }
@@ -419,13 +415,50 @@ ast_node *parse_if(char **tokens, int *index)
     }
   }
   (*index) = end + 1 + saut;
-  ast_node *then_block = construct_ast_rec(tokens, index);
+  ast_node *then_block = create_ast_node(NODE_SEQUENCE, "THEN_BLOCK");
   // Si il y a un point virgule et qu'on a pas atteint la fin c'est qu'il y a une autre commande après le bloc et on continue la récursion
-  (*index)--; // On a déjà incrémenté l'index
   while (*index < then_end)
   {
-    (*index)++;
-    if (construct_pipeline_and_add_child(tokens, index, then_block) == NULL)
+    ast_node *child = construct_ast_rec(tokens, index);
+    if (child != NULL)
+    {
+      if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+      {
+        // Construire le reste du pipeline
+        (*index)++;
+        ast_node *second = construct_ast_rec(tokens, index);
+        if (second == NULL)
+        {
+          free_ast_node(then_block);
+          free_ast_node(condition_node);
+          return NULL;
+        }
+        ast_node *pipeline = create_pipeline_node(child, second);
+        // Ajouter les autres commandes au pipeline
+        while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+        {
+          (*index)++;
+          ast_node *child = construct_ast_rec(tokens, index);
+          if (child != NULL)
+          {
+            pipeline = create_pipeline_node(pipeline, child);
+          }
+          else
+          {
+            free_ast_node(then_block);
+            free_ast_node(condition_node);
+            free_ast_node(pipeline);
+            return NULL;
+          }
+        }
+        add_child(then_block, pipeline);
+      }
+      else
+      {
+        add_child(then_block, child);
+      }
+    }
+    else
     {
       free_ast_node(then_block);
       free_ast_node(condition_node);
@@ -469,17 +502,56 @@ ast_node *parse_if(char **tokens, int *index)
     }
     then_end += 3;
     (*index) = then_end;
-    ast_node *else_block = construct_ast_rec(tokens, index);
+    ast_node *else_block = create_ast_node(NODE_SEQUENCE, "ELSE_BLOCK");
     // Si il y a un point virgule et qu'on a pas atteint la fin
-    (*index)--; // On a déjà incrémenté l'index
     while (*index < else_end)
     {
-      (*index)++;
-      if (construct_pipeline_and_add_child(tokens, index, else_block) == NULL)
+      ast_node *child = construct_ast_rec(tokens, index);
+      if (child != NULL)
       {
-        free_ast_node(then_block);
-        free_ast_node(condition_node);
+        if (tokens[*index] && strcmp(tokens[*index], "|") == 0)
+        {
+          // Construire le reste du pipeline
+          (*index)++;
+          ast_node *second = construct_ast_rec(tokens, index);
+          if (second == NULL)
+          {
+            free_ast_node(else_block);
+            free_ast_node(condition_node);
+            free_ast_node(then_block);
+            return NULL;
+          }
+          ast_node *pipeline = create_pipeline_node(child, second);
+          // Ajouter les autres commandes au pipeline
+          while (tokens[*index] != NULL && strcmp(tokens[*index], "|") == 0)
+          {
+            (*index)++;
+            ast_node *child = construct_ast_rec(tokens, index);
+            if (child != NULL)
+            {
+              pipeline = create_pipeline_node(pipeline, child);
+            }
+            else
+            {
+              free_ast_node(else_block);
+              free_ast_node(condition_node);
+              free_ast_node(then_block);
+              free_ast_node(pipeline);
+              return NULL;
+            }
+          }
+          add_child(else_block, pipeline);
+        }
+        else
+        {
+          add_child(else_block, child);
+        }
+      }
+      else
+      {
         free_ast_node(else_block);
+        free_ast_node(condition_node);
+        free_ast_node(then_block);
         return NULL;
       }
     }
@@ -721,6 +793,7 @@ ast_node *construct_ast_rec(char **tokens, int *index)
     {
       // Ignorer les fermetures de blocs
       (*index)++;
+      break;
     }
 
     else if (strcmp(tokens[*index], ";") == 0)
@@ -732,14 +805,26 @@ ast_node *construct_ast_rec(char **tokens, int *index)
     else if (strcmp(tokens[*index], "for") == 0)
     {
       node = parse_for_loop(tokens, index);
+      if (node == NULL)
+      {
+        return NULL;
+      }
     }
     else if (strcmp(tokens[*index], "if") == 0)
     {
       node = parse_if(tokens, index);
+      if (node == NULL)
+      {
+        return NULL;
+      }
     }
     else
     {
       node = parse_command(tokens, index);
+      if (node == NULL)
+      {
+        return NULL;
+      }
     }
   }
   return node;
@@ -756,7 +841,13 @@ ast_node *construct_ast(char *line)
   while (tokens[index] != NULL)
   {
     ast_node *child = construct_ast_rec(tokens, &index);
-    if (child != NULL)
+    if (child == NULL)
+    {
+      free_ast_node(root);
+      free_split(tokens);
+      return NULL;
+    }
+    else
     {
       // Vérifier si on a un pipe après la commande
       if (tokens[index] != NULL && strcmp(tokens[index], "|") == 0)
@@ -795,12 +886,6 @@ ast_node *construct_ast(char *line)
       {
         add_child(root, child);
       }
-    }
-    else
-    {
-      free_ast_node(root);
-      root = NULL;
-      break;
     }
   }
 
@@ -857,9 +942,72 @@ char *substitute_variables(const char *str, int *last_return_value)
   return result;
 }
 
+void exec_for_file(for_loop *loop, int *last_return_value, char *file, char **files, int previous_return_value, char *original_dir)
+{
+  // Définir la variable d'environnement
+  setenv(loop->variable, file, 1);
+
+  execute_ast(loop->block, last_return_value);
+
+  if (*last_return_value == 1 || sigint_received)
+  {
+    // Quitter la boucle si une commande a échoué
+    // Libérer la mémoire allouée pour les fichiers
+    for (int i = 0; files[i] != NULL; i++)
+    {
+      free(files[i]);
+    }
+    free(files);
+
+    free(loop->dir);
+    loop->dir = NULL;
+
+    // Restaurer dir à sa valeur d'origine
+    loop->dir = strdup(original_dir);
+
+    // Libérer la mémoire allouée pour le chemin du répertoire
+    free(original_dir);
+
+    // Supprimer la variable d'environnement temporaire
+    unsetenv(loop->variable);
+    return;
+  }
+  signal_received = 0;
+
+  // Faire le max entre le retour de la commande et le retour précédent
+  if (*last_return_value > previous_return_value)
+  {
+    previous_return_value = *last_return_value;
+  }
+
+  // Libérer la mémoire allouée pour les fichiers
+  for (int i = 0; files[i] != NULL; i++)
+  {
+    free(files[i]);
+  }
+  free(files);
+
+  free(loop->dir);
+  loop->dir = NULL;
+
+  // Restaurer dir à sa valeur d'origine
+  loop->dir = strdup(original_dir);
+
+  // Libérer la mémoire allouée pour le chemin du répertoire
+  free(original_dir);
+
+  // Supprimer la variable d'environnement temporaire
+  unsetenv(loop->variable);
+}
+
 void execute_for(ast_node *node, int *last_return_value)
 {
   for_loop *loop = &node->data.for_loop;
+  // Afficher le noeud du for
+  if (loop->block->type == NODE_PIPELINE)
+  {
+    printf("C block\n");
+  }
   char *original_dir = strdup(loop->dir);
   char *substituted_dir = substitute_variables(loop->dir, last_return_value);
   if (substituted_dir == NULL)
@@ -986,13 +1134,6 @@ void execute_for(ast_node *node, int *last_return_value)
           continue;
       }
 
-      // parallèle d'un maximum de max_files tours de boucle.
-      if (loop->max_files > 0 && file_count >= loop->max_files)
-      {
-        //printf("Max files reached\n");
-        //break;
-      }
-
       // Filtrer les fichiers par extension
       if (loop->ext)
       {
@@ -1026,18 +1167,30 @@ void execute_for(ast_node *node, int *last_return_value)
 
   int previous_return_value = *last_return_value;
 
-  //traitement parallèle si défini
+  // Traitement parallèle des fichiers
   if (loop->max_files > 0)
   {
     for (int i = 0; i < loop->max_files; i++)
     {
       if (fork() == 0)
       {
-        exec_for_simple(loop, last_return_value, files, previous_return_value, original_dir);
-        exit(0);
+        exec_for_file(loop, last_return_value, files[i], files, previous_return_value, original_dir);
+        exit(*last_return_value);
       }
     }
-    while (wait(NULL) > 0);
+    // Attendre tous les processus enfants
+    int status;
+    for (int i = 0; i < loop->max_files; i++)
+    {
+      waitpid(-1, &status, 0);
+      if (WIFEXITED(status))
+      {
+        if (WEXITSTATUS(status) > *last_return_value)
+        {
+          *last_return_value = WEXITSTATUS(status);
+        }
+      }
+    }
   }
   else
   {
@@ -1047,7 +1200,7 @@ void execute_for(ast_node *node, int *last_return_value)
 
 void exec_for_simple(for_loop *loop, int *last_return_value, char **files, int previous_return_value, char *original_dir)
 {
-  
+
   // Il faut maintenant exécuter les commandes pour chaque fichier
   for (int i = 0; files[i] != NULL; i++)
   {
@@ -1391,7 +1544,8 @@ void execute_command(ast_node *node, int *last_return_value)
         }
         free(copy_args);
       }
-      else if (WIFSIGNALED(status) && WTERMSIG(status) != SIGINT){
+      else if (WIFSIGNALED(status) && WTERMSIG(status) != SIGINT)
+      {
         // Continuer le programme si on a reçu un signal autre que SIGINT
         signal_received = 1;
       }
@@ -1557,7 +1711,8 @@ void handle_sigint(int sig)
 
 void handle_sigterm(int sig)
 {
-  if(in_exec){
+  if (in_exec)
+  {
     signal_received = 1;
   }
 }
