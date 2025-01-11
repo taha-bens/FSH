@@ -41,6 +41,8 @@ void create_prompt(char *prompt, const char *current_dir, int last_return_value,
 void restore_standard_fds(int saved_stdin, int saved_stdout, int saved_stderr);
 void cleanup_and_exit(int last_return_value, ast_node *tree);
 
+void exec_for_simple(for_loop *loop, int *last_return_value, char **files, int previous_return_value, char *original_dir);
+
 // Fonction pour renvoyer si une chaine de caractères marque la fin d'une commande
 int is_special_char(char *c)
 {
@@ -984,9 +986,12 @@ void execute_for(ast_node *node, int *last_return_value)
           continue;
       }
 
-      // Limiter le nombre de fichiers si max_files est défini
+      // parallèle d'un maximum de max_files tours de boucle.
       if (loop->max_files > 0 && file_count >= loop->max_files)
-        break;
+      {
+        //printf("Max files reached\n");
+        //break;
+      }
 
       // Filtrer les fichiers par extension
       if (loop->ext)
@@ -1021,6 +1026,28 @@ void execute_for(ast_node *node, int *last_return_value)
 
   int previous_return_value = *last_return_value;
 
+  //traitement parallèle si défini
+  if (loop->max_files > 0)
+  {
+    for (int i = 0; i < loop->max_files; i++)
+    {
+      if (fork() == 0)
+      {
+        exec_for_simple(loop, last_return_value, files, previous_return_value, original_dir);
+        exit(0);
+      }
+    }
+    while (wait(NULL) > 0);
+  }
+  else
+  {
+    exec_for_simple(loop, last_return_value, files, previous_return_value, original_dir);
+  }
+}
+
+void exec_for_simple(for_loop *loop, int *last_return_value, char **files, int previous_return_value, char *original_dir)
+{
+  
   // Il faut maintenant exécuter les commandes pour chaque fichier
   for (int i = 0; files[i] != NULL; i++)
   {
