@@ -1,27 +1,16 @@
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
-#include <dirent.h>
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <stdbool.h>
-#include <signal.h>
 
 #include <ctype.h>
 
-#include "headers/node.h"
-#include "headers/stack_dir.h"
 #include "headers/string_util.h"
-#include "headers/pwd.h"
-#include "headers/ftype.h"
-#include "headers/cd.h"
+#include "headers/node.h"
 
 #include "headers/ast.h"
 
