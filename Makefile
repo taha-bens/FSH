@@ -2,7 +2,7 @@
 
 # Compiler and flags
 CC ?= gcc
-CCFLAGS ?= -Wall  -Os  #-fsanitize=address #A désactiver pour les tests valgrind mais utile pour debug
+CCFLAGS ?= -Wall  #-fsanitize=address #A désactiver pour les tests valgrind mais utile pour debug
 
 # Headers
 HEADERS = pwd.h ftype.h cd.h node.h stack_dir.h string_util.h ast.h execution.h 
