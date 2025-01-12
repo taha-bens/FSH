@@ -119,3 +119,66 @@ char *trim_and_reduce_spaces(const char *str)
 
   return new_str;
 }
+
+// Fonction pour renvoyer si une chaine de caractères marque la fin d'une commande
+int is_special_char(char *c)
+{
+  return strcmp(c, ";") == 0 || strcmp(c, "|") == 0 || strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0 || strcmp(c, "{") == 0 || strcmp(c, "}") == 0 || strcmp(c, "]") == 0;
+}
+
+int is_redirection_char(char *c)
+{
+  return strcmp(c, ">") == 0 || strcmp(c, ">>") == 0 || strcmp(c, "<") == 0 || strcmp(c, ">|") == 0 || strcmp(c, "2>") == 0 || strcmp(c, "2>>") == 0 || strcmp(c, "2>|") == 0;
+}
+
+
+char *substitute_variables(const char *str, int *last_return_value)
+{
+  char *result = strdup(str);
+  char *dollar_pos = strchr(result, '$');
+
+  while (dollar_pos != NULL)
+  {
+    // On a un $ on doit faire une substitution
+    // Les variables ne sont qu'une lettre
+    char *var_name = malloc(2);
+    strncpy(var_name, dollar_pos + 1, 1);
+    var_name[1] = '\0';
+    char *var_value = getenv(var_name);
+    if (var_value == NULL)
+    {
+      fprintf(stderr, "Variable %s not set\n", var_name);
+      *last_return_value = 1;
+      free(var_name);
+      free(result);
+      return NULL;
+    }
+    // On a la valeur de la variable on peut la remplacer
+    size_t expanded_len = strlen(result) + strlen(var_value) - 1;
+    char *expanded = malloc(expanded_len + 1);
+    if (expanded == NULL)
+    {
+      perror("malloc");
+      *last_return_value = 1;
+      free(var_name);
+      free(result);
+      return NULL;
+    }
+    char *suffix = dollar_pos + 1;
+    strncpy(expanded, result, dollar_pos - result);
+    expanded[dollar_pos - result] = '\0';
+    strcat(expanded, var_value);
+    strcat(expanded, suffix + 1);
+    free(result);
+    result = expanded;
+    free(var_name);
+
+    // Rechercher la prochaine occurrence de $
+    dollar_pos = strchr(result, '$');
+  }
+
+  return result;
+}
+
+
+
