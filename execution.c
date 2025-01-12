@@ -5,15 +5,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
-#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <stdbool.h>
-#include <signal.h>
-
 
 #include "headers/node.h"
 #include "headers/stack_dir.h"
