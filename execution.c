@@ -152,11 +152,6 @@ void exec_for_file(for_loop *loop, int *last_return_value, char *file, char **fi
 void execute_for(ast_node *node, int *last_return_value)
 {
   for_loop *loop = &node->data.for_loop;
-  // Afficher le noeud du for
-  if (loop->block->type == NODE_PIPELINE)
-  {
-    printf("C block\n");
-  }
   char *original_dir = strdup(loop->dir);
   char *substituted_dir = substitute_variables(loop->dir, last_return_value);
   if (substituted_dir == NULL)
@@ -321,6 +316,10 @@ void execute_for(ast_node *node, int *last_return_value)
   {
     for (int i = 0; i < loop->max_files; i++)
     {
+      if(files[i] == NULL)
+      {
+        break;
+      }
       if (fork() == 0)
       {
         exec_for_file(loop, last_return_value, files[i], files, previous_return_value, original_dir);
@@ -328,10 +327,15 @@ void execute_for(ast_node *node, int *last_return_value)
       }
     }
     // Attendre tous les processus enfants
-    int status;
+    int status; int ret;
     for (int i = 0; i < loop->max_files; i++)
     {
-      waitpid(-1, &status, 0);
+      ret = waitpid(-1, &status, 0);
+      if (ret < 0)
+      {
+        // Eviter un processus zombie
+        wait(NULL);
+      }
       if (WIFEXITED(status))
       {
         if (WEXITSTATUS(status) > *last_return_value)
@@ -422,6 +426,9 @@ void execute_pipeline(ast_node *pipeline, int *last_return_value)
     if (WIFEXITED(status))
     {
       *last_return_value = WEXITSTATUS(status);
+    }
+    else {
+      wait(NULL); // Eviter le zombie en cas d'interruption
     }
   }
 }
@@ -712,7 +719,13 @@ void execute_command(ast_node *node, int *last_return_value)
     else
     {
       int status;
-      waitpid(pid, &status, 0);
+      int ret = 0;
+      ret = waitpid(pid, &status, 0);
+      if (ret < 0)
+      {
+        // Eviter un processus zombie
+        wait(NULL);
+      }
       if (WIFEXITED(status))
       {
         *last_return_value = WEXITSTATUS(status);
